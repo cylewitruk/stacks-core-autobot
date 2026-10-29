@@ -50,10 +50,17 @@ jobs:
           key: autobot-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '**/Cargo.toml') }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
             autobot-rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '**/Cargo.toml') }}-
-      - name: Install toolchain and pinned nextest
-        run: |
-          rustup show active-toolchain
-          cargo install cargo-nextest --version 0.9.145 --locked
+      - name: Verify toolchain
+        run: rustup show active-toolchain
+      - name: Restore pinned nextest executable
+        id: nextest-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-nextest
+          key: autobot-nextest-v1-0.9.145-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install pinned nextest on cache miss
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --version 0.9.145 --locked
       - name: Format, check and test
         run: |
           cargo fmt --all -- --check

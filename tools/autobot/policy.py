@@ -2,7 +2,36 @@
 
 import hashlib
 import json
+import re
+from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import PurePosixPath
+
+IMAGE = re.compile(r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}")
+PROVIDER_CREDENTIALS = {
+    "codex": ("CODEX_API_KEY",),
+    "claude": ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+    "copilot": ("COPILOT_GITHUB_TOKEN",),
+}
+SECRET_NAMES = frozenset(name for names in PROVIDER_CREDENTIALS.values() for name in names)
+
+
+def instruction_matches(path, pattern):
+    """Match path segments with ** covering zero or more directories."""
+    parts, patterns = path.split("/"), pattern.split("/")
+
+    @lru_cache(maxsize=None)
+    def match(index, pattern_index):
+        """Memoize wildcard branches within this bounded path comparison."""
+        if pattern_index == len(patterns):
+            return index == len(parts)
+        if patterns[pattern_index] == "**":
+            return (match(index, pattern_index + 1)
+                    or index < len(parts) and match(index + 1, pattern_index))
+        return (index < len(parts) and fnmatchcase(parts[index], patterns[pattern_index])
+                and match(index + 1, pattern_index + 1))
+
+    return match(0, 0)
 
 
 class Blocked(ValueError):

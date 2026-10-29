@@ -3,19 +3,28 @@
 import hashlib
 import json
 import os
-import re
 import selectors
 import subprocess
 import time
 import uuid
 
-from policy import Blocked
+from policy import Blocked, IMAGE
 
 CHECKS = {
     "format": ["cargo", "fmt", "--all", "--", "--check"],
     "check": ["cargo", "check", "--workspace", "--locked", "--offline"],
     "nextest": ["cargo", "nextest", "run", "--workspace", "--lib", "--locked", "--offline"],
 }
+
+
+def available_checks(required):
+    """Offer dependency-consuming checks only when the plan prepares Cargo."""
+    return ["diff", "format"] + (["check", "nextest"] if {"check", "nextest"} & set(required) else [])
+
+
+def resource_exhausted(report):
+    """Distinguish execution limits from ordinary compiler or assertion failures."""
+    return report["timed_out"] or report["output_limited"] or report["exit_code"] in (137, -9)
 
 
 def bounded_process(command, env, timeout):
@@ -65,12 +74,13 @@ class LocalWorkspace:
         """Select a pinned execution image and unique volumes for this task attempt."""
         self.config, self.archive, self.branch = config, archive, branch
         self.image = os.environ.get("AUTOBOT_EXECUTION_IMAGE", "")
-        if not re.fullmatch(r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}", self.image):
+        if not IMAGE.fullmatch(self.image):
             raise Blocked("AUTOBOT_EXECUTION_IMAGE must be an immutable digest or local image ID")
         self.prefix = "autobot-local-" + uuid.uuid4().hex
         self.volumes = {kind: self.prefix + "-" + kind for kind in ("source", "state", "cargo", "target")}
         self.env = {k: os.environ[k] for k in ("PATH", "DOCKER_HOST", "DOCKER_CONTEXT") if k in os.environ}
         self.current = None
+        self.cargo_prepared = False
 
     def __enter__(self):
         """Initialize a local-only branch from the pinned source archive."""
@@ -135,10 +145,11 @@ class LocalWorkspace:
 
     def prepare(self, required, timeout):
         """Fetch locked dependencies before edits, with no provider or GitHub credentials."""
-        if "nextest" in required:
+        if {"check", "nextest"} & set(required):
             report = self.execute("fetch", ["cargo", "fetch", "--locked"], timeout, network=True)
             if report["exit_code"] or report["timed_out"] or report["output_limited"]:
                 raise Blocked("dependency prefetch failed; repair the execution environment")
+            self.cargo_prepared = True
 
     def files(self, paths):
         """Read approved source files through the isolated helper."""
@@ -153,6 +164,8 @@ class LocalWorkspace:
         """Run mandatory and agent-requested checks; shell strings are never accepted."""
         if not isinstance(requested, list) or not all(isinstance(c, str) and c in {"diff", *CHECKS} for c in requested):
             raise Blocked("agent requested an unknown local check")
+        if {"check", "nextest"} & set(required + requested) and not self.cargo_prepared:
+            raise Blocked("Cargo checks require dependencies prepared before candidate edits; revise the plan's checks")
         reports = []
         for name in dict.fromkeys([*required, *requested]):
             remaining = deadline - time.monotonic()
@@ -160,6 +173,8 @@ class LocalWorkspace:
                 raise Blocked("local execution time budget exhausted")
             command = ["python3", "-I", "/opt/autobot/workspace_entry.py", "diff"] if name == "diff" else CHECKS[name]
             reports.append(self.execute(name, command, min(remaining, self.config["local_check_timeout_seconds"]), control=name == "diff"))
+            if resource_exhausted(reports[-1]):
+                break
         return reports
 
     def export(self):

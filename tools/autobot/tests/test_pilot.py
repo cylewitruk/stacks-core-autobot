@@ -1,6 +1,7 @@
 """Safety contracts for the manual local pilot; no live service calls."""
 
 from copy import deepcopy
+import io
 import json
 import os
 from pathlib import Path
@@ -100,13 +101,24 @@ class PilotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(pilot, "DIRECTORY", Path(directory)), \
                 patch.object(pilot, "preflight", return_value=[]), patch.object(pilot, "read_secrets", return_value={"CODEX_API_KEY": "fixture"}), \
                 patch.object(pilot, "installation_token", return_value="temporary"), patch.object(pilot, "revoke") as revoke, \
-                patch.object(pilot.subprocess, "run") as run:
+                patch.object(pilot.subprocess, "run") as run, patch("sys.stdout", new_callable=io.StringIO) as output:
             run.return_value.returncode = 1
+            run.return_value.stdout = b"fixture output"
+            run.return_value.stderr = b"temporary token: fixture"
             result = pilot.advance({"credentials_file": "/fixture", "agent_image": "image", "execution_image": "image"}, CONFIG, 7)
             self.assertEqual(result, 1)
             environment = run.call_args.kwargs["env"]
             self.assertEqual(environment["AUTOBOT_ISSUE"], "7")
             self.assertEqual(environment["GH_TOKEN"], "temporary")
+            reports = Path(environment["AUTOBOT_LOCAL_REPORT_DIR"])
+            self.assertEqual(reports.stat().st_mode & 0o777, 0o700)
+            diagnostics = json.loads(pilot.private_file(reports / "controller.json"))
+            self.assertEqual(diagnostics["exit_code"], 1)
+            self.assertNotIn("temporary", json.dumps(diagnostics))
+            self.assertNotIn("fixture", json.dumps(diagnostics))
+            self.assertIn("[REDACTED]", diagnostics["stderr"])
+            self.assertIn("Controller failed (exit 1)", output.getvalue())
+            self.assertNotIn("fixture", output.getvalue())
             revoke.assert_called_once_with("temporary")
 
     def test_app_token_narrows_repository_and_revokes_wrong_scope(self):

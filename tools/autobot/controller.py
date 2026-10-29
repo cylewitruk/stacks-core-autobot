@@ -1,7 +1,6 @@
 """Durable issue-to-PR state machine. Only this trusted process writes to GitHub."""
 
 import base64
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -13,11 +12,11 @@ from urllib.parse import quote
 from agents import Agents
 from bundle import Bundle
 from github import GitHub
-from local import CHECKS, LocalWorkspace
+from local import LocalWorkspace, available_checks, resource_exhausted
 from scheduler import QueueScan
 from policy import (Blocked, approval_binding, approval_valid, digest, local_evidence_valid, merge_reasons,
                     consensus_valid, design_roster, path_allowed, required_local_checks, selected_model,
-                    validate_design_issue, validate_edits, validate_plan, validate_qc, validate_review)
+                    instruction_matches, validate_design_issue, validate_edits, validate_plan, validate_qc, validate_review)
 
 MARKER = "<!-- stacks-autobot:v1 -->"
 STATE_PREFIX = "\n```json\n"
@@ -69,6 +68,7 @@ class Controller:
         self.state = None
         self.issue = None
         self.permissions = {}
+        self.trees = {}
         self.workspace_factory = workspace_factory or LocalWorkspace
         self.bundle = Bundle(bundle_root)
 
@@ -123,10 +123,13 @@ class Controller:
 
     def tree(self, sha):
         """Fetch a complete tree; never silently treat truncation as missing files."""
+        if sha in self.trees:
+            return self.trees[sha]
         result = self.gh.repo(f"git/trees/{sha}?recursive=1")
         if result.get("truncated"):
             raise Blocked("repository tree is truncated")
-        return {v["path"]: v for v in result["tree"]}
+        self.trees[sha] = {v["path"]: v for v in result["tree"]}
+        return self.trees[sha]
 
     def files(self, sha, paths):
         """Read bounded regular text blobs, rejecting symlinks and executable files."""
@@ -163,7 +166,7 @@ class Controller:
                 continue
             if path.startswith(".github/instructions/"):
                 match = re.search(r'^applyTo: "([^"]+)"', content, re.MULTILINE)
-                if not match or not any(fnmatch.fnmatch(p, pattern.strip())
+                if not match or not any(instruction_matches(p, pattern.strip())
                                        for p in self.state.get("plan", {}).get("files", [])
                                        for pattern in match[1].split(",")):
                     continue
@@ -348,6 +351,12 @@ class Controller:
         if state.get("head") or state.get("pending"):
             if base != state["base"] or state.get("pending"):
                 raise Blocked("approved base or prepared publication changed; reconcile manually")
+            if (state["stage"] == "clarify"
+                    and all(requirements[key] == state["requirements"][key] for key in ("title", "body"))):
+                self.invalidate_design("Clarification answered for the open design.")
+                state.update(stage="plan", requirements=requirements)
+                self.save()
+                return True
             self.reopen_design({"kind": "requirements", "explanation": "Authorized issue requirements changed.",
                                 "evidence": [digest(requirements)]}, "requirements")
             state.update(requirements=requirements,
@@ -428,6 +437,15 @@ class Controller:
             state.update(stage="implement", approval={"kind": "consensus", "plan": state["plan_id"],
                                                        "binding": approval_binding(state, self.config)})
 
+    def suspend(self, stage, reason=None):
+        """Pause work without replacing an earlier resume target on repeated failures."""
+        if self.state["stage"] not in ("blocked", "stopped"):
+            self.state["retry_stage"] = self.state["stage"]
+        self.state["stage"] = stage
+        if reason is not None:
+            self.state["reason"] = reason
+        self.save()
+
     def commands(self, comments):
         """Apply exact writer commands; plan approval is bound to its full digest."""
         for comment in comments:
@@ -478,10 +496,8 @@ class Controller:
                 self.state.pop("reason", None)
                 self.save()
             elif self.state and text == "/autobot stop":
-                if self.state["stage"] not in ("blocked", "stopped"):
-                    self.state["retry_stage"] = self.state["stage"]
-                self.state.update(stage="stopped", command_id=comment["id"])
-                self.save()
+                self.state["command_id"] = comment["id"]
+                self.suspend("stopped")
 
     def plan(self):
         """Triage and attach a structured plan without making code changes."""
@@ -560,7 +576,7 @@ class Controller:
                 attempts[round_key] = attempt + 1
                 context = self.context()
                 context.update(files=workspace.files(state["plan"]["files"]), prior_reviews=state["reviews"],
-                               local_feedback=feedback, available_checks=["diff", *CHECKS], required_checks=required,
+                               local_feedback=feedback, available_checks=available_checks(required), required_checks=required,
                                design_authorization=self.design_authorization())
                 result = self.ask(self.config["implementer"], "develop", context)
                 if not isinstance(result, dict) or set(result) != {"summary", "edits", "checks", "design_issue"}:
@@ -580,7 +596,9 @@ class Controller:
                 export = workspace.export()
                 record = {**export, "checks": reports, "image": state["execution_image"]}
                 self.local_report(attempt, record)
-                if any(c["exit_code"] != 0 or c["timed_out"] or c["output_limited"] for c in reports):
+                if any(resource_exhausted(c) for c in reports):
+                    raise Blocked("local check exhausted execution resources; inspect diagnostics and runner capacity before retrying")
+                if any(c["exit_code"] != 0 for c in reports):
                     feedback = {"checks": reports}
                     continue
                 if deadline - time.monotonic() < 600:
@@ -852,8 +870,7 @@ def main():
             # Do not publish raw CLI/provider errors: they can contain credentials or injected text.
             if controller.state:
                 reason = str(error) if isinstance(error, Blocked) else "Transport or schema failure; inspect runner health."
-                controller.state.update(retry_stage=controller.state["stage"], stage="blocked", reason=reason)
-                controller.save()
+                controller.suspend("blocked", reason)
             print(f"Autobot stopped safely on issue {number}", file=sys.stderr)
             raise SystemExit(1) from None
 

@@ -7,24 +7,22 @@ import getpass
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
 from bundle import Bundle
 from controller import validate_config
-from policy import Blocked, design_roster
+from policy import Blocked, IMAGE, PROVIDER_CREDENTIALS, SECRET_NAMES, design_roster
 
 ROOT = Path(__file__).resolve().parents[2]
 DIRECTORY = Path.home() / ".config/stacks-autobot-pilot"
 PERMISSIONS = {"contents": "write", "issues": "write", "pull_requests": "write",
                "checks": "read", "administration": "read"}
-SECRET_NAMES = {"CODEX_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "COPILOT_GITHUB_TOKEN"}
-IMAGE = re.compile(r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}")
 
 
 def private_file(path):
@@ -65,9 +63,8 @@ def read_secrets(path, config):
             or not all(isinstance(v, str) and v.strip() and "\x00" not in v for v in data.values())):
         raise Blocked("credential file has invalid or unsupported entries")
     providers = {identity["provider"] for identity in design_roster(config)}
-    for provider, names in {"codex": {"CODEX_API_KEY"}, "claude": {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"},
-                            "copilot": {"COPILOT_GITHUB_TOKEN"}}.items():
-        if provider in providers and len(set(data) & names) != 1:
+    for provider, names in PROVIDER_CREDENTIALS.items():
+        if provider in providers and len(set(data) & set(names)) != 1:
             raise Blocked("configure exactly one dedicated credential for " + provider)
     return data
 
@@ -245,14 +242,26 @@ def advance(settings, config, issue):
         if problems:
             raise Blocked("Pilot blocked: " + "; ".join(problems))
         credentials = read_secrets(settings["credentials_file"], config)
+        reports = Path(tempfile.mkdtemp(prefix=f"issue-{issue}-", dir=DIRECTORY))
         token = installation_token(settings, config)
         try:
             environment = {k: os.environ[k] for k in ("PATH", "TMPDIR", "DOCKER_HOST", "DOCKER_CONTEXT") if k in os.environ}
             environment.update(credentials, GH_TOKEN=token, AUTOBOT_ISSUE=str(issue),
+                               AUTOBOT_LOCAL_REPORT_DIR=str(reports),
                                AUTOBOT_AGENT_IMAGE=settings["agent_image"], AUTOBOT_EXECUTION_IMAGE=settings["execution_image"])
             result = subprocess.run([sys.executable, "-B", "tools/autobot/controller.py"], cwd=ROOT,
                                     env=environment, capture_output=True)
-            print("One controller invocation finished; inspect the issue state before advancing again.")
+            def redact(output):
+                """Keep bounded private diagnostics without the credentials passed to the child."""
+                text = output.decode("utf-8", errors="replace")
+                for secret in [token, *credentials.values()]:
+                    text = text.replace(secret, "[REDACTED]")
+                return text[-65536:]
+
+            write_private(reports / "controller.json", {"exit_code": result.returncode,
+                "stdout": redact(result.stdout), "stderr": redact(result.stderr)})
+            print(f"Controller {'failed' if result.returncode else 'finished'} (exit {result.returncode}). "
+                  f"Private diagnostics: {reports}")
             return result.returncode
         finally:
             revoke(token)

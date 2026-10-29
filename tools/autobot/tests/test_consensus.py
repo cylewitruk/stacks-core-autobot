@@ -1,7 +1,9 @@
 """Governance, independent design consensus, drift, reopen and learning lifecycles."""
 
 from copy import deepcopy
+import io
 import json
+import os
 from pathlib import Path
 import shutil
 import re
@@ -15,8 +17,9 @@ from agents import Agents
 from agent_entry import prompt_for
 from bundle import Bundle, RESOURCES
 from controller import MARKER, STATE_PREFIX
+import controller as controller_module
 from policy import (Blocked, approval_valid, consensus_valid, design_roster, digest, path_allowed,
-                    validate_design_issue, validate_qc)
+                    instruction_matches, validate_design_issue, validate_qc)
 
 DESIGN_ISSUE = {"kind": "plan", "explanation": "Acceptance requires another documented example.",
                 "evidence": ["The plan only names the happy-path example; the requirement includes errors."]}
@@ -54,6 +57,98 @@ class ConsensusTests(unittest.TestCase):
         controller.load(self.gh.comments)
         controller.state = state
         controller.save()
+
+    def test_repeated_early_failure_preserves_resume_target(self):
+        """Repeated wrong-head merge observations cannot clobber review or a stopped resume target."""
+        for stopped in (False, True):
+            with self.subTest(stopped=stopped):
+                self.setUp()
+                prior = self.reach("review")
+                if stopped:
+                    self.gh.comment("/autobot stop")
+                    self.tick()
+                self.gh.pr.update(merged=True, merge_commit_sha="f" * 40)
+                self.gh.pr["head"]["sha"] = "b" * 40
+                for _ in range(2):
+                    with patch.object(controller_module, "GitHub", return_value=self.gh), \
+                            patch.object(controller_module, "Agents", return_value=self.agents), \
+                            patch.dict(os.environ, {"AUTOBOT_ISSUE": "7", "GITHUB_REPOSITORY": CONFIG["repository"]}), \
+                            patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+                        controller_module.main()
+                    recovered = Controller(self.gh, self.agents, self.config)
+                    recovered.issue = self.gh.issue
+                    recovered.load(self.gh.comments)
+                    self.assertEqual(recovered.state["retry_stage"], "review")
+                    self.assertEqual(recovered.state["stage"], "blocked")
+                self.gh.pr.update(merged=False)
+                self.gh.pr["head"]["sha"] = prior["head"]
+                self.gh.comment("/autobot retry")
+                self.assertEqual(self.tick()["stage"], "review")
+
+    def test_published_clarification_answers_do_not_reopen_again(self):
+        """Answering two questions completes the already open design under fresh consensus."""
+        prior = self.reach("review")
+        active = Controller(self.gh, self.agents, self.config)
+        active.issue = self.gh.issue
+        active.load(self.gh.comments)
+        active.reopen_design(DESIGN_ISSUE, "pr_review:claude")
+        original = self.agents.ask
+        plans = 0
+
+        def ask(provider, stage, context):
+            """Ask two successive questions before proposing the clarified plan."""
+            nonlocal plans
+            report = original(provider, stage, context)
+            if stage == "plan":
+                plans += 1
+                report["questions"] = [f"Question {plans}?"] if plans < 3 else []
+            return report
+
+        with patch.object(self.agents, "ask", side_effect=ask):
+            self.assertEqual(self.tick()["stage"], "clarify")
+            for answer in ("First answer.", "Second answer."):
+                self.gh.comment(answer)
+                state = self.tick()
+                self.assertEqual(state["design_reopens"], 1)
+                self.assertEqual(state["plan_revisions"], 1)
+                self.assertNotIn("approval", state)
+        state = self.reach("implement")
+        self.assertEqual(state["design_parent"], prior["head"])
+        self.assertGreater(state["calls"], prior["calls"])
+        self.assertTrue(consensus_valid(state, self.config))
+
+    def test_instruction_globs_include_root_and_nested_files(self):
+        """Root Markdown receives guidance and ordinary wildcards do not cross directories."""
+        self.assertTrue(instruction_matches("README.md", "**/*.md"))
+        self.assertTrue(instruction_matches("docs/nested/guide.md", "**/*.md"))
+        self.assertTrue(instruction_matches("src/lib.rs", "src/**/*.rs"))
+        self.assertFalse(instruction_matches("docs/nested/guide.md", "docs/*.md"))
+        path = ".github/instructions/markdown.instructions.md"
+        self.gh.trees[self.gh.base][path] = '---\napplyTo: "**/*.md"\n---\nReview Markdown.\n'
+        self.tick()
+        active = Controller(self.gh, self.agents, self.config)
+        active.issue = self.gh.issue
+        active.load(self.gh.comments)
+        active.state["plan"] = {**PLAN, "files": ["README.md"]}
+        self.assertIn(path, active.context()["policy"])
+
+    def test_tree_cache_is_per_commit_and_per_invocation(self):
+        """Repeated content-addressed reads reuse one tree without caching failed responses."""
+        active = Controller(self.gh, self.agents, self.config)
+        with patch.object(self.gh, "repo", wraps=self.gh.repo) as repo:
+            active.tree(self.gh.base)
+            active.files(self.gh.base, ["docs/guide.md"])
+            active.tree(self.gh.base)
+            trees = [call for call in repo.call_args_list if call.args[0].startswith("git/trees/")]
+            self.assertEqual(len(trees), 1)
+            Controller(self.gh, self.agents, self.config).tree(self.gh.base)
+            self.assertEqual(sum(call.args[0].startswith("git/trees/") for call in repo.call_args_list), 2)
+        other = "b" * 40
+        with patch.object(self.gh, "repo", side_effect=[{"truncated": True}, {"tree": []}]) as repo:
+            with self.assertRaises(Blocked):
+                active.tree(other)
+            self.assertEqual(active.tree(other), {})
+            self.assertEqual(repo.call_count, 2)
 
     def test_every_participating_identity_and_planner_votes_fresh(self):
         """Each unique role model votes; no reviewer sees a peer's report in its round."""

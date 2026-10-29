@@ -181,6 +181,9 @@ Every candidate runs `git diff --check`. Plans containing Rust also require
 these fixed checks by identifier; arbitrary shell commands are not accepted.
 Tests needing network access or writes to source fail closed and require operator
 attention. This suite does not cover every consensus or integration scenario.
+Non-Rust plans offer only whitespace and formatting checks. Dependency-consuming
+checks require Cargo preparation before candidate edits; unprepared requests
+stop with an explicit setup error rather than entering a repair loop.
 
 `local_reviewer` selects one fresh reviewer (Claude by default);
 `local_review_model` overrides its model, including when Copilot is selected.
@@ -188,6 +191,12 @@ Failing checks or review findings return to the implementer before any publicati
 The default allows two local repair rounds per PR revision, 15 minutes per check,
 and 40 minutes for the local stage. The shared 48-call budget includes every local implementation and review attempt. Expensive independent PR reviews start
 only after local acceptance and publication.
+Timeouts, output exhaustion and killed check processes stop immediately for
+operator diagnosis; they do not trigger additional model repair turns. Cold
+workspace builds under the 4-CPU/8-GB container limits have not been qualified
+against these time limits. Validate that capacity before enabling Rust tasks;
+the supervised pilot remains documentation-only. Per-task caches are not shared
+across distinct tasks to avoid importing untrusted build state.
 
 The issue state records budgets, checkpoint/tree identities and successful check
 and review evidence. Actions artifacts retain candidate edits and bounded check
@@ -311,6 +320,11 @@ private credential files and a matching instruction bundle. `advance` verifies
 the App slug, requests an installation token scoped to this one repository and
 exact permissions, then revokes it on exit. It never uses the owner's token for
 controller writes. A failed revocation leaves only GitHub's normal short expiry.
+Each invocation creates a private directory beneath `~/.config/stacks-autobot-pilot`
+for local check reports and `controller.json` (exit status and bounded captured
+output with supplied credentials redacted). The terminal prints the outcome and
+directory path, not the captured output. Treat these diagnostics as private,
+untrusted data; redaction is not a guarantee that arbitrary output is shareable.
 
 Start with a small documentation-only issue, apply `autobot` as a writer, and
 observe intake, design consensus, local repair/review, publication, independent
@@ -385,6 +399,10 @@ changes. The revised plan must include all accumulated changed files; otherwise
 it blocks for manual reconciliation. Fresh implementation starts from the preserved
 head, updates the same PR without force-pushing, and receives new local checks and
 PR reviews. A foreign/closed head always stops further work.
+Discussion answers while a published design is already awaiting clarification
+refresh its plan and invalidate votes without spending another reopen or revision.
+Changing the issue title/body still counts as a new requirements change. The
+persistent model-call ceiling applies to every clarification turn.
 
 Default limits are two plan revisions, two design reopens, two PR fix rounds,
 two local repair rounds per implementation generation, and **48 total attempted
@@ -463,8 +481,10 @@ Do not promote Rust changes to autonomous merge on this baseline. Existing
 upstream workflows remain unchanged and retain their existing opt-in switch.
 
 Rust CI caches registry indexes/downloads, Git dependency objects and `target`,
-keyed by OS, architecture, toolchain/manifest/lockfile hashes and commit. It never
-caches credentials or installed executables. PR caches remain in GitHub's PR cache
+keyed by OS, architecture, toolchain/manifest/lockfile hashes and commit. A separate
+cache stores only the pinned nextest executable, keyed by version, runner OS image,
+architecture and toolchain; cache misses build it from source. Neither cache stores
+credentials. PR caches remain in GitHub's PR cache
 scope; privileged controller operations do not consume candidate build caches. Local
 execution uses separate per-task Cargo and target volumes.
 
