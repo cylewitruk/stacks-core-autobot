@@ -425,9 +425,16 @@ The controller never deletes branches or force-pushes automatically. Removing or
 reapplying enrollment or revoking its actor's access also invalidates authorization.
 
 Issue label/edit events and author/writer comments can wake the controller.
-Each invocation advances one stage or one reviewer. The schedule first reconciles
-up to ten recently updated labelled closed issues, then scans up to ten labelled
-open issues, oldest-updated first, and advances the first actionable one.
+Each invocation advances one stage or one reviewer. The schedule rotates through
+labelled open issues and up to ten recently updated labelled closed issues in
+issue-number order. It inspects at most `max_open_issues` candidates per run and
+advances the first actionable one. A separate bot-owned queue cursor comment on
+the oldest enrolled open issue records each visit before dispatch, so waiting
+or failing issues do not starve later work. If no open issues remain, a closed
+candidate hosts the cursor. A host change reuses that host's cursor, or starts
+from the lowest issue number if it has none. Explicit issue invocations
+do not read or move the cursor. Duplicate or malformed bot-owned cursors block
+scanning for operator reconciliation.
 GitHub may delay scheduled runs. Commands and state live in GitHub comments, so
 runner disks and queued workflow events are not the source of truth. The App owns
 one state comment per issue; duplicate state comments stop processing. Treat the

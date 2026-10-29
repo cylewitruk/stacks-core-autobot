@@ -14,6 +14,7 @@ from agents import Agents
 from bundle import Bundle
 from github import GitHub
 from local import CHECKS, LocalWorkspace
+from scheduler import QueueScan
 from policy import (Blocked, approval_binding, approval_valid, digest, local_evidence_valid, merge_reasons,
                     consensus_valid, design_roster, path_allowed, required_local_checks, selected_model,
                     validate_design_issue, validate_edits, validate_plan, validate_qc, validate_review)
@@ -841,10 +842,7 @@ def main():
             raise Blocked("invalid issue number")
         numbers = [int(number)]
     else:
-        issues = gh.pages("issues?state=open&labels=autobot&sort=updated&direction=asc")
-        closed = gh.repo(f"issues?state=closed&labels=autobot&sort=updated&direction=desc&per_page={config['max_outcome_issues']}")
-        numbers = [i["number"] for i in closed[:config["max_outcome_issues"]] if "pull_request" not in i]
-        numbers += [i["number"] for i in issues if "pull_request" not in i][:config["max_open_issues"]]
+        numbers = QueueScan(gh, config)
     for number in numbers:
         controller = Controller(gh, Agents(config), config)
         try:
