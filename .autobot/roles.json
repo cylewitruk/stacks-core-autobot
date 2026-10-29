@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "shared": ".autobot/instructions.md",
+  "roles": {
+    "intake": {
+      "skill": ".agents/skills/autobot-assess-scope/SKILL.md",
+      "schema": ".autobot/schemas/intake.json"
+    },
+    "plan": {
+      "skill": ".agents/skills/autobot-design/SKILL.md",
+      "schema": ".autobot/schemas/plan.json"
+    },
+    "plan_qc": {
+      "skill": ".agents/skills/autobot-review-design/SKILL.md",
+      "schema": ".autobot/schemas/plan_qc.json"
+    },
+    "develop": {
+      "skill": ".agents/skills/autobot-implement/SKILL.md",
+      "schema": ".autobot/schemas/develop.json"
+    },
+    "local_review": {
+      "skill": ".agents/skills/autobot-review-local/SKILL.md",
+      "schema": ".autobot/schemas/local_review.json"
+    },
+    "review": {
+      "skill": ".agents/skills/autobot-review-pr/SKILL.md",
+      "schema": ".autobot/schemas/review.json"
+    }
+  }
+}

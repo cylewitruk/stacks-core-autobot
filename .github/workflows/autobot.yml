@@ -1,0 +1,81 @@
+name: Autobot controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to advance; leave blank to scan the autobot label
+        type: string
+        required: false
+  issue_comment:
+    types: [created, edited]
+  issues:
+    types: [opened, labeled, unlabeled, edited, reopened, closed]
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions: {}
+
+# GitHub keeps only one pending run. Commands remain in issue comments, and the
+# scheduled scan recovers commands on labelled issues that lost their queued run.
+concurrency:
+  group: autobot-controller
+  cancel-in-progress: false
+
+jobs:
+  advance:
+    if: >-
+      github.repository == 'cylewitruk/stacks-core-autobot' &&
+      github.ref == 'refs/heads/main' && vars.AUTOBOT_ENABLED == 'true' &&
+      (github.event_name != 'issues' ||
+       contains(github.event.issue.labels.*.name, 'autobot') || github.event.label.name == 'autobot') &&
+      (github.event_name != 'issue_comment' ||
+       (!github.event.issue.pull_request &&
+        github.event.comment.user.type != 'Bot' &&
+        (contains(github.event.issue.labels.*.name, 'autobot') || startsWith(github.event.comment.body, '/autobot ')) &&
+        (github.event.comment.user.login == github.event.issue.user.login ||
+         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))))
+    runs-on: [self-hosted, linux, x64, autobot-controller]
+    environment: autobot
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create repository-scoped controller token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.AUTOBOT_APP_ID }}
+          private-key: ${{ secrets.AUTOBOT_APP_PRIVATE_KEY }}
+          owner: cylewitruk
+          repositories: stacks-core-autobot
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-administration: read
+      - name: Advance one durable stage
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          AUTOBOT_ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          AUTOBOT_AGENT_IMAGE: ${{ vars.AUTOBOT_AGENT_IMAGE }}
+          AUTOBOT_EXECUTION_IMAGE: ${{ vars.AUTOBOT_EXECUTION_IMAGE }}
+          AUTOBOT_LOCAL_REPORT_DIR: ${{ runner.temp }}/autobot-local
+          CODEX_API_KEY: ${{ secrets.AUTOBOT_CODEX_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.AUTOBOT_CLAUDE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.AUTOBOT_ANTHROPIC_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTOBOT_COPILOT_TOKEN }}
+        run: python3 tools/autobot/controller.py
+      - name: Preserve local test and review diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autobot-local-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/autobot-local
+          if-no-files-found: ignore
+          retention-days: 7
