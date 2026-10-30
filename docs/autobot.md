@@ -18,9 +18,11 @@ AI-generated code; this sandbox is not an upstream submission pipeline.
    to the planner; a revision invalidates every prior vote. High risk escalates;
    rejection and missing intent stop. Manual mode adds writer approval after
    consensus and cannot waive the charter or unanimous design gate.
-4. The implementer proposes edits in a credential-free local workbench. Real
-   checks and a fresh local review must pass before remote Git objects, a branch
-   and a PR are created. The App's publication triggers hosted PR CI.
+4. When approved implementation starts, the controller creates a branch at the
+   approved base commit and links it in the issue's native **Development** section.
+   The implementer proposes edits in a credential-free local workbench. Real checks
+   and a fresh local review must pass before candidate Git objects are created,
+   the branch advances, or a PR opens. The App's publication triggers hosted PR CI.
 5. Claude and Codex independently review the published commit. Optional Copilot
    is an additional required reviewer. Implementation defects enter bounded fix
    rounds. Requirements or design defects reopen planning and require fresh
@@ -217,7 +219,10 @@ the supervised pilot remains documentation-only. Per-task caches are not shared
 across distinct tasks to avoid importing untrusted build state.
 
 The issue state records budgets, checkpoint/tree identities and successful check
-and review evidence. Actions artifacts retain candidate edits and bounded check
+and review evidence. GitHub's native Development link appears when approved
+implementation starts, while the remote branch still contains only the base.
+A failure or design reopen can leave that base-only branch linked for inspection;
+the controller does not automatically delete it. Actions artifacts retain candidate edits and bounded check
 output for seven days. Treat test output as untrusted data. A crashed runner may
 lose unuploaded diagnostics and local checkpoints; retries start from the last
 published parent with the remaining budget. Cleanup is best effort: an abruptly
@@ -467,7 +472,40 @@ approval migration. Preserve old state and PR evidence when replacing a task.
 The controller never deletes branches or force-pushes automatically. Removing or
 reapplying enrollment or revoking its actor's access also invalidates authorization.
 
+## Native GitHub progress and audit state
+
+The current stage is shown by one `autobot:stage:*` label. The controller creates
+missing status labels and updates only that namespace, preserving the `autobot`
+enrollment label and unrelated human labels. These labels are derived displays:
+changing one cannot grant approval, alter budgets or skip checks. A failed label
+sync leaves the durable checkpoint intact and is retried on the next invocation.
+The labels provide native filtering and can be used when organizing a project
+board. Projects integration requires separate access and configuration; milestones
+remain available for human-defined release grouping.
+
+The bot's comment shows decisions, questions, the plan and review evidence without
+repeating the QC rationale as status. If label synchronization fails, the comment
+shows a stage fallback that clears when label synchronization recovers, including
+on idle tasks. Its JSON checkpoint is collapsed under **Automation audit state**.
+It is still public and readable through GitHub's API; collapsing content does not
+make it private. The checkpoint stores exact commit,
+plan, image and approval bindings, remaining budgets and interrupted-operation
+intent. Labels, project fields and milestones cannot replace that recovery data.
+A private checkpoint would require a separate private storage/access design.
+Existing expanded comments remain readable, with budgets and evidence preserved.
+
+A linked Development branch is reserved only after current design approval, at the
+approved base SHA, using GitHub's `createLinkedBranch` mutation. Intent is saved
+first so a lost response can be reconciled without creating a second branch.
+An unlinked same-name branch or an unexpected tip stops work. Candidate code is
+published only after local checks and review; a deleted reservation or changed
+base-only branch is never overwritten or silently recreated. Opening the PR links
+it to the issue through the existing closing reference. Projects are not required
+for this native Development link.
+
 Issue label/edit events and author/writer comments can wake the controller.
+Stage-label additions and removals are excluded so progress display updates do
+not advance the controller.
 Each invocation advances one stage or one reviewer. The schedule rotates through
 labelled open issues and up to ten recently updated labelled closed issues in
 issue-number order. It inspects at most `max_open_issues` candidates per run and

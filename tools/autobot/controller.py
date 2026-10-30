@@ -20,6 +20,7 @@ from policy import (Blocked, approval_binding, approval_valid, digest, local_evi
 
 MARKER = "<!-- stacks-autobot:v1 -->"
 STATE_PREFIX = "\n```json\n"
+ESCALATION_REASON = "High-risk or consequential work requires human intervention."
 PROVIDERS = {"claude", "codex", "copilot"}
 
 
@@ -71,13 +72,18 @@ class Controller:
         self.trees = {}
         self.workspace_factory = workspace_factory or LocalWorkspace
         self.bundle = Bundle(bundle_root)
+        self.stage_synced = None
+        self.stage_sync_warned = False
+        self.stage_fallback = False
 
     def save(self):
         """Persist machine state and a readable plan/review summary in one bot-owned comment."""
         state = self.state
         self.record_outcome()
-        lines = [MARKER, "## Autobot", "", "Stage: **" + state["stage"] + "**", ""]
+        lines = [MARKER, "## Autobot", ""]
+        shown_rationales = set()
         for stage, report in state.get("qc", {}).items():
+            shown_rationales.add(report["rationale"].strip())
             lines += ["**QC " + stage + ": " + report["decision"] + "**", "", report["rationale"], ""]
             lines += ["- " + v for v in report["questions"] + report["concerns"]] + [""]
         if state.get("plan"):
@@ -98,9 +104,13 @@ class Controller:
             lines += ["**" + provider + "** (`" + report["head"] + "`): " + report["verdict"],
                       "", report["summary"], ""]
             lines += ["- " + f["path"] + ": " + f["detail"] for f in report["findings"]] + [""]
-        if state.get("reason"):
-            lines += ["Status: " + state["reason"], ""]
-        body = "\n".join(lines) + STATE_PREFIX + json.dumps(state, sort_keys=True) + "\n```\n"
+        reason = state.get("reason", "").strip()
+        if any(reason == ESCALATION_REASON + " " + rationale for rationale in shown_rationales):
+            reason = ESCALATION_REASON
+        if reason and reason not in shown_rationales:
+            lines += ["Status: " + reason, ""]
+        lines += ["<details>", "<summary>Automation audit state (public; used for recovery)</summary>", ""]
+        body = "\n".join(lines) + STATE_PREFIX + json.dumps(state, sort_keys=True) + "\n```\n\n</details>\n"
         if len(body.encode()) > 60000:
             raise Blocked("durable state exceeds comment limit")
         if self.comment_id:
@@ -108,6 +118,24 @@ class Controller:
         else:
             result = self.gh.repo(f"issues/{self.issue['number']}/comments", "POST", {"body": body})
             self.comment_id = result["id"]
+        self.stage_fallback = False
+        self.sync_stage()
+        if self.stage_sync_warned:
+            fallback = "Stage: **" + state["stage"] + "** (label sync unavailable).\n"
+            body = body.replace("## Autobot\n", "## Autobot\n\n" + fallback, 1)
+            self.gh.repo(f"issues/comments/{self.comment_id}", "PATCH", {"body": body})
+            self.stage_fallback = True
+
+    def sync_stage(self):
+        """Mirror durable progress to labels without letting display failures authorize or block work."""
+        if not self.state or self.stage_synced == self.state["stage"] or self.stage_sync_warned:
+            return
+        try:
+            self.gh.sync_stage(self.state["issue"], self.state["stage"])
+            self.stage_synced = self.state["stage"]
+        except Exception:
+            self.stage_sync_warned = True
+            print("Autobot stage label sync failed; durable state retained for retry.", file=sys.stderr)
 
     def load(self, comments):
         """Trust only the configured App's single, well-formed state comment."""
@@ -120,6 +148,7 @@ class Controller:
             self.state = json.loads(matches[0]["body"].rsplit(STATE_PREFIX, 1)[1].rsplit("\n```", 1)[0])
             if self.state["version"] != 2 or self.state["issue"] != self.issue["number"]:
                 raise Blocked("state identity mismatch")
+            self.stage_fallback = matches[0]["body"].startswith(MARKER + "\n## Autobot\n\nStage: **")
 
     def tree(self, sha):
         """Fetch a complete tree; never silently treat truncation as missing files."""
@@ -409,7 +438,7 @@ class Controller:
             state["design_votes"][member["id"]] = {"identity": member,
                 "binding": approval_binding(state, self.config), "report": report}
         if report["risk"] == "high" or decision == "escalate":
-            state.update(stage="escalated", reason="High-risk or consequential work requires human intervention. " + report["rationale"])
+            state.update(stage="escalated", reason=ESCALATION_REASON + " " + report["rationale"])
         elif decision in ("reject", "clarify"):
             state["stage"] = "rejected" if decision == "reject" else "clarify"
         elif stage == "intake":
@@ -628,8 +657,34 @@ class Controller:
                 return final, evidence
         raise Blocked("local tests or review still fail; local repair budget exhausted")
 
+    def reserve_development_branch(self):
+        """Create a linked base-only branch after approval, with durable intent for lost responses."""
+        state = self.state
+        if state.get("head"):
+            return
+        branch, base = state["branch"], state["base"]
+        reservations = state.setdefault("development_branches", {})
+        if branch not in reservations:
+            reservations[branch] = {"base": base, "linked": False}
+            self.save()
+        if reservations[branch]["base"] != base:
+            raise Blocked("development branch reservation base changed")
+        refs = self.gh.repo("git/matching-refs/heads/" + branch)
+        refs = [ref for ref in refs if ref["ref"] == "refs/heads/" + branch]
+        if refs:
+            if refs[0]["object"]["sha"] != base or not self.gh.branch_linked(state["issue"], branch):
+                raise Blocked("development branch moved or is not linked to this issue")
+        else:
+            self.gh.create_linked_branch(self.issue["node_id"], branch, base)
+            if not self.gh.branch_linked(state["issue"], branch):
+                raise Blocked("development branch link was not confirmed")
+        reservations[branch]["linked"] = True
+        self.save()
+
     def implement(self):
-        """Publish Git objects only after isolated tests and the local review pass."""
+        """Reserve a linked base branch; publish candidate objects only after local acceptance."""
+        self.design_authorization()
+        self.reserve_development_branch()
         state = self.state
         parent = state.get("head", state["base"])
         originals = self.files(parent, state["plan"]["files"])
@@ -661,12 +716,16 @@ class Controller:
         if refs:
             current = refs[0]["object"]["sha"]
             if current != pending["head"]:
-                if pending["initial"] or current != pending["parent"]:
+                reservation = state.get("development_branches", {}).get(state["branch"])
+                if current != pending["parent"] or (pending["initial"] and (
+                        reservation != {"base": pending["parent"], "linked": True}
+                        or not self.gh.branch_linked(state["issue"], state["branch"]))):
                     raise Blocked("branch moved outside the controller")
                 self.gh.repo("git/refs/heads/" + state["branch"], "PATCH",
                              {"sha": pending["head"], "force": False})
-        elif pending["initial"]:
-            self.gh.repo("git/refs", "POST", {"ref": "refs/heads/" + state["branch"], "sha": pending["head"]})
+        elif pending["initial"] and state["branch"] not in state.get("development_branches", {}):
+            # Recover prepared publication from controllers predating branch reservations.
+            self.gh.create_linked_branch(self.issue["node_id"], state["branch"], pending["head"])
         else:
             raise Blocked("implementation branch disappeared")
         owner = self.config["repository"].split("/")[0]
@@ -783,6 +842,9 @@ class Controller:
                            or digest(self.state.get("charter")) != self.state.get("charter_id")
                            or self.state.get("bundle_hashes") != self.bundle.hashes):
             raise Blocked("trusted charter, role, skill or schema bundle changed; operator reconciliation required")
+        self.sync_stage()
+        if self.stage_sync_warned or self.stage_fallback:
+            self.save()
         if self.state and self.state.get("pr") and self.state["stage"] not in ("merged", "observed_merged"):
             pr = self.gh.repo(f"pulls/{self.state['pr']}")
             if pr.get("merged"):

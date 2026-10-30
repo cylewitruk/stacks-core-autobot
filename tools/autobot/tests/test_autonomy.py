@@ -182,7 +182,7 @@ class AutonomousTests(unittest.TestCase):
         self.gh.comment("Actually change the behavior too.")
         with self.assertRaises(Blocked):
             self.tick()
-        self.assertFalse(self.gh.refs)
+        self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
 
     def test_manual_approval_cannot_skip_plan_qc(self):
         """Autonomous mode still runs QC when a writer posts the old approve command."""

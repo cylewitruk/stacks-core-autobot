@@ -61,8 +61,8 @@ class LocalLoopTests(unittest.TestCase):
             failed = False
 
             def run_checks(self, required, requested, deadline):
-                """Assert that no remote branch or commit has been created at this point."""
-                outer.assertFalse(outer.gh.refs)
+                """Only the linked base branch may exist before local checks pass."""
+                outer.assertEqual(set(outer.gh.refs.values()), {outer.gh.base})
                 outer.assertIsNone(outer.gh.pr)
                 outer.assertEqual(len(outer.gh.commits), 1)
                 reports = super().run_checks(required, requested, deadline)
@@ -102,9 +102,9 @@ class LocalLoopTests(unittest.TestCase):
         self.assertEqual(state["local_attempts"]["0:0"], 2)
         self.assertEqual(state["local_evidence"]["review"]["verdict"], "approve")
         self.assertEqual(len(self.gh.commits), 2)
-        self.assertFalse(self.gh.refs)
+        self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
 
-    def test_exhausted_local_budget_never_creates_remote_objects(self):
+    def test_exhausted_local_budget_never_publishes_candidate_objects(self):
         """Repeated local failures stop safely and retries cannot replenish their allowance."""
         class AlwaysFail(FakeWorkspace):
             """Return a failing test result for every candidate."""
@@ -121,7 +121,7 @@ class LocalLoopTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             self.tick()
         self.assertEqual(len(self.agents.calls), count)
-        self.assertFalse(self.gh.refs)
+        self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
         self.assertEqual(len(self.gh.commits), 1)
         self.assertFalse(any(stage in ("review", "local_review") for _, stage, _ in self.agents.calls))
 
@@ -158,7 +158,7 @@ class LocalLoopTests(unittest.TestCase):
                     self.tick()
                 self.assertEqual(sum(stage == "develop" for _, stage, _ in self.agents.calls), 1)
                 self.assertFalse(any(stage == "local_review" for _, stage, _ in self.agents.calls))
-                self.assertFalse(self.gh.refs)
+                self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
 
 
 class ExecutionBoundaryTests(unittest.TestCase):

@@ -4,6 +4,10 @@ import json
 import subprocess
 from urllib.parse import quote
 
+STAGE_LABEL_PREFIX = "autobot:stage:"
+STAGES = {"intake", "clarify", "plan", "plan_qc", "planned", "implement", "publish", "review",
+          "gates", "merging", "merged", "observed_merged", "blocked", "stopped", "rejected", "escalated"}
+
 
 class GitHub:
     """Use gh's authenticated transport, with bounded pagination and explicit methods."""
@@ -12,6 +16,7 @@ class GitHub:
         """Select the sole repository this client may mutate."""
         self.repository = repository
         self.root = "repos/" + repository
+        self.known_labels = None
 
     def api(self, path, method="GET", data=None):
         """Make a request without placing payloads or credentials in shell text."""
@@ -35,6 +40,63 @@ class GitHub:
         if result.returncode or len(result.stdout) > 100_000_000:
             raise RuntimeError("source archive unavailable or too large")
         return result.stdout
+
+    def sync_stage(self, number, stage):
+        """Maintain one namespaced progress label while preserving enrollment and human labels."""
+        if stage not in STAGES:
+            raise ValueError("unknown stage label")
+        wanted = STAGE_LABEL_PREFIX + stage.replace("_", "-")
+        current = {label["name"] for label in self.pages(f"issues/{number}/labels")}
+        if wanted not in current:
+            if self.known_labels is None:
+                self.known_labels = {label["name"] for label in self.pages("labels")}
+            if wanted not in self.known_labels:
+                self.repo("labels", "POST", {"name": wanted, "color": "8250df",
+                    "description": "Autobot progress display; does not grant execution or merge approval."})
+                self.known_labels.add(wanted)
+            self.repo(f"issues/{number}/labels", "POST", {"labels": [wanted]})
+        for old in sorted(current - {wanted}):
+            if old.startswith(STAGE_LABEL_PREFIX):
+                self.repo(f"issues/{number}/labels/" + quote(old, safe=""), "DELETE")
+
+    def branch_linked(self, number, branch):
+        """Check the issue's native Development links with bounded pagination and repo identity."""
+        owner, name = self.repository.split("/")
+        query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+          repository(owner:$owner,name:$name) { issue(number:$number) {
+            linkedBranches(first:100,after:$cursor) {
+              nodes { ref { name repository { nameWithOwner } } }
+              pageInfo { hasNextPage endCursor }
+            }
+          } }
+        }"""
+        cursor = None
+        for _ in range(100):
+            response = self.api("graphql", "POST", {"query": query, "variables": {
+                "owner": owner, "name": name, "number": number, "cursor": cursor}})
+            if response.get("errors"):
+                raise RuntimeError("cannot establish issue Development links")
+            page = response["data"]["repository"]["issue"]["linkedBranches"]
+            if any(node.get("ref") and node["ref"]["name"] == branch
+                   and node["ref"]["repository"]["nameWithOwner"] == self.repository for node in page["nodes"]):
+                return True
+            if not page["pageInfo"]["hasNextPage"]:
+                return False
+            cursor = page["pageInfo"]["endCursor"]
+        raise RuntimeError("Development link pagination exceeded safety bound")
+
+    def create_linked_branch(self, issue_id, branch, sha):
+        """Create a repository branch linked to its issue without publishing candidate edits."""
+        mutation = """mutation($input:CreateLinkedBranchInput!) {
+          createLinkedBranch(input:$input) { linkedBranch { ref { name target { oid } } } }
+        }"""
+        result = self.api("graphql", "POST", {"query": mutation, "variables": {"input": {
+            "issueId": issue_id, "name": branch, "oid": sha}}})
+        if result.get("errors"):
+            raise RuntimeError("linked branch creation failed; reconcile on retry")
+        ref = result["data"]["createLinkedBranch"]["linkedBranch"]["ref"]
+        if ref["name"] != branch or ref["target"]["oid"] != sha:
+            raise RuntimeError("created Development branch differs from reserved name or commit")
 
     def pages(self, path, key=None):
         """Read all pages or fail if the bounded traversal cannot finish."""

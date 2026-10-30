@@ -293,7 +293,7 @@ class ConsensusTests(unittest.TestCase):
                 self.assertEqual(state["stage"], "plan")
                 self.assertEqual(state["design_reopens"], 1)
                 self.assertNotIn("approval", state)
-                self.assertFalse(self.gh.refs)
+                self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
                 self.assertEqual(len(self.gh.commits), 1)
                 self.assertFalse(state["design_votes"])
                 state = self.reach("implement")
@@ -369,7 +369,7 @@ class ConsensusTests(unittest.TestCase):
         with patch.object(self.agents, "ask", side_effect=mixed):
             with self.assertRaisesRegex(Blocked, "cannot include candidate edits"):
                 self.tick()
-        self.assertFalse(self.gh.refs)
+        self.assertEqual(set(self.gh.refs.values()), {self.gh.base})
         self.assertEqual(len(self.gh.commits), 1)
 
     def test_reopen_reconciliation_and_foreign_heads_fail_closed(self):
@@ -435,6 +435,42 @@ class ConsensusTests(unittest.TestCase):
         self.assertFalse(path_allowed(".agents/skills/autobot-design/SKILL.md"))
         self.assertFalse(path_allowed("CONTRIBUTING.md"))
         self.assertIn("untrusted evidence", Bundle().instructions("plan")["shared"])
+
+    def test_related_planner_receives_recorded_escalation_rationale(self):
+        """Real escalation outcomes retain their explanation through later planner context."""
+        rationale = "The guide exposes a consequential operational choice requiring owner review."
+        for stage in ("intake", "plan_qc"):
+            for report in (decision("proceed" if stage == "intake" else "approve",
+                                    risk="high", rationale=rationale),
+                           decision("escalate", rationale=rationale)):
+                with self.subTest(stage=stage, report=report):
+                    self.setUp()
+                    if stage == "plan_qc":
+                        self.reach("plan_qc")
+                    self.agents.qc_reports = [report]
+                    state = self.tick()
+                    self.assertEqual(state["stage"], "escalated")
+                    # Give the completed fixture a historical identity; preserve its actual evidence.
+                    prior = json.loads(self.gh.comments[-1]["body"].rsplit(STATE_PREFIX, 1)[1]
+                                       .rsplit("\n```", 1)[0])
+                    prior["issue"] = 3
+                    prior["outcomes"][-1]["issue"] = 3
+                    comment = deepcopy(self.gh.comments[-1])
+                    comment["body"] = MARKER + STATE_PREFIX + json.dumps(prior) + "\n```\n"
+                    self.setUp()
+                    self.gh.past_outcomes = [(3, [comment])]
+                    self.assertEqual(self.tick()["stage"], "plan")
+                    self.assertEqual(self.tick()["stage"], "plan_qc")
+                    _, called_stage, context = self.agents.calls[-1]
+                    self.assertEqual(called_stage, "plan")
+                    lessons = context["prior_outcomes_untrusted"]
+                    self.assertEqual(len(lessons), 1)
+                    self.assertEqual(lessons[0]["issue"], 3)
+                    self.assertEqual(lessons[0]["status"], "escalated")
+                    self.assertIn(rationale, lessons[0]["reason"])
+                    self.assertEqual(lessons[0]["reason"], state["reason"])
+                    self.assertFalse(self.gh.refs)
+                    self.assertEqual(self.gh.merges, 0)
 
     def test_planner_consumes_prior_failure_as_regression_evidence(self):
         """An outcome is usable evidence for a new plan while conflicting governance suggestions fail."""
