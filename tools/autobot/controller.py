@@ -178,6 +178,7 @@ class Controller:
 
     def ask(self, provider, stage, context):
         """Debit the persistent attempt budget before contacting a model."""
+        context = {**context, "repository_commit": self.state.get("head", self.state["base"])}
         if len(json.dumps(context).encode()) > self.config["max_context_bytes"]:
             raise Blocked("context exceeds v1 limit; narrow the issue")
         if self.state["calls"] >= self.config["max_model_calls"]:
@@ -391,7 +392,7 @@ class Controller:
                            accumulated_changed_files=state.get("changed_files", []),
                            published_parent=state.get("design_parent"))
         else:
-            context["available_files"] = [p for p in self.tree(state["base"]) if path_allowed(p)]
+            context["editable_files"] = [p for p in self.tree(state["base"]) if path_allowed(p)]
         if member and state.get("head"):
             context["published_files"] = self.files(state["head"], state["plan"]["files"])
         provider = member["provider"] if member else self.config["qc"]
@@ -503,7 +504,7 @@ class Controller:
         """Triage and attach a structured plan without making code changes."""
         context = self.context()
         context["design_feedback"] = self.state.get("design_feedback")
-        context["available_files"] = [p for p in self.tree(self.state["base"]) if path_allowed(p)]
+        context["editable_files"] = [p for p in self.tree(self.state["base"]) if path_allowed(p)]
         if self.state.get("head"):
             paths = self.state["changed_files"]
             context.update(accumulated_before=self.files(self.state["base"], paths),

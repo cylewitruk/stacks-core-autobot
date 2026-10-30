@@ -7,23 +7,37 @@ import subprocess
 import sys
 
 from bundle import Bundle
+from repository import TOOL_NAMES
 
 
 def command_for(request, schema_path, output_path):
     """Construct provider-specific invocations with explicit model selection."""
     model = ["--model", request["model"]] if request["model"] else []
     provider = request["provider"]
+    server = {"command": "/usr/bin/env", "args": ["-i", "PATH=/usr/bin:/bin", "python3", "-I",
+              "/opt/tools/autobot/repository.py", "serve"]}
+    mcp = json.dumps({"mcpServers": {"repository": server}})
     if provider == "codex":
         return ["codex", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                 "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", schema_path,
                 "--output-last-message", output_path, "-c", "web_search=\"disabled\"",
-                "-c", "features.shell_tool=false", *model, "-"]
+                "-c", "features.shell_tool=false",
+                "-c", 'mcp_servers.repository.command="/usr/bin/env"',
+                "-c", "mcp_servers.repository.args=" + json.dumps(server["args"]),
+                "-c", "mcp_servers.repository.enabled_tools=" + json.dumps(list(TOOL_NAMES)),
+                "-c", "mcp_servers.repository.required=true", *model, "-"]
     if provider == "claude":
-        return ["claude", "-p", "--safe-mode", "--tools", "", "--setting-sources", "",
+        return ["claude", "-p", "--tools", "", "--setting-sources", "",
+                "--disable-slash-commands", "--settings", '{"disableAllHooks":true}',
+                "--mcp-config", mcp, "--allowedTools", ",".join("mcp__repository__" + t for t in TOOL_NAMES),
                 "--strict-mcp-config", "--no-session-persistence", "--output-format", "json",
                 "--json-schema", json.dumps(request["schema"]), *model]
     if provider == "copilot":
-        return ["copilot", "--no-ask-user", "--disable-builtin-mcps",
+        server.update(type="local", tools=list(TOOL_NAMES))
+        return ["copilot", "--no-ask-user", "--disable-builtin-mcps", "--no-custom-instructions",
+                "--additional-mcp-config", json.dumps({"mcpServers": {"repository": server}}),
+                "--available-tools", ",".join("repository-" + t for t in TOOL_NAMES),
+                "--allow-tool", "repository",
                 "--deny-tool", "shell,write,read,url,memory", "--silent", *model]
     raise ValueError("unsupported provider")
 
@@ -33,6 +47,10 @@ def prompt_for(request, bundle):
     context = dict(request["context"])
     authorization = context.pop("design_authorization", None)
     prompt = {"instructions": bundle.instructions(request["stage"]),
+              "repository_snapshot": {"commit": context["repository_commit"],
+                  "local_checkpoint": context.get("local_commit"),
+                  "has_local_overlay": request["stage"] in ("develop", "local_review"),
+                  "tools": list(TOOL_NAMES)},
               "response_schema": request["schema"], "untrusted_context": context}
     if authorization is not None:
         if request["stage"] != "develop":

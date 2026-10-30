@@ -110,6 +110,11 @@ class PilotTests(unittest.TestCase):
             environment = run.call_args.kwargs["env"]
             self.assertEqual(environment["AUTOBOT_ISSUE"], "7")
             self.assertEqual(environment["GH_TOKEN"], "temporary")
+            home = Path(environment["HOME"])
+            self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(home.parent, Path(environment["AUTOBOT_LOCAL_REPORT_DIR"]))
+            for key in ("XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+                self.assertTrue(Path(environment[key]).is_relative_to(home))
             reports = Path(environment["AUTOBOT_LOCAL_REPORT_DIR"])
             self.assertEqual(reports.stat().st_mode & 0o777, 0o700)
             diagnostics = json.loads(pilot.private_file(reports / "controller.json"))
