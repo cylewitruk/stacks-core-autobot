@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "proceed",
+        "clarify",
+        "reject",
+        "escalate"
+      ]
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "goal_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fit": {
+          "type": "string"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "goal_ids",
+        "fit",
+        "conflicts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "decision",
+    "rationale",
+    "risk",
+    "questions",
+    "concerns",
+    "scope"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+**
+!tools/
+!tools/autobot/
+!tools/autobot/agent_entry.py
+!tools/autobot/bundle.py
+!tools/autobot/policy.py
+!.autobot/
+!.autobot/**
+!.agents/
+!.agents/skills/
+!.agents/skills/autobot-*/
+!.agents/skills/autobot-*/SKILL.md

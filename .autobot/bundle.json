@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "resources": [
+    ".agents/skills/autobot-assess-scope/SKILL.md",
+    ".agents/skills/autobot-design/SKILL.md",
+    ".agents/skills/autobot-implement/SKILL.md",
+    ".agents/skills/autobot-review-design/SKILL.md",
+    ".agents/skills/autobot-review-local/SKILL.md",
+    ".agents/skills/autobot-review-pr/SKILL.md",
+    ".autobot/charter.json",
+    ".autobot/instructions.md",
+    ".autobot/roles.json",
+    ".autobot/schemas/develop.json",
+    ".autobot/schemas/intake.json",
+    ".autobot/schemas/local_review.json",
+    ".autobot/schemas/plan.json",
+    ".autobot/schemas/plan_qc.json",
+    ".autobot/schemas/review.json"
+  ]
+}

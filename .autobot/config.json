@@ -1,0 +1,37 @@
+{
+  "repository": "cylewitruk/stacks-core-autobot",
+  "base": "main",
+  "bot_login": "stacks-core-autobot[bot]",
+  "autonomous": true,
+  "qc": "codex",
+  "qc_model": "",
+  "max_plan_revisions": 2,
+  "planner": "claude",
+  "implementer": "codex",
+  "local_reviewer": "claude",
+  "local_review_model": "",
+  "max_local_fix_rounds": 2,
+  "local_timeout_seconds": 2400,
+  "local_check_timeout_seconds": 900,
+  "reviewers": [
+    "claude",
+    "codex"
+  ],
+  "models": {
+    "claude": "claude-sonnet-4-6",
+    "codex": "gpt-6.1-sol",
+    "copilot": ""
+  },
+  "merge_enabled": false,
+  "required_checks": [
+    "Autobot policy",
+    "Autobot Rust"
+  ],
+  "max_fix_rounds": 2,
+  "max_model_calls": 48,
+  "max_context_bytes": 350000,
+  "max_open_issues": 10,
+  "max_design_reopens": 2,
+  "max_outcome_issues": 10,
+  "max_outcome_lessons": 3
+}

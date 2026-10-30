@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!agent_entry.py
+!Execution.Dockerfile
+!workspace_entry.py
+!local.py
+!policy.py
