@@ -58,11 +58,13 @@ class FakeGitHub:
         """Seed one opted-in issue and a writer's start command."""
         self.config = config
         self.base = "a" * 40
-        self.issue = {"number": 7, "title": "Improve guide", "body": "Explain this term.", "state": "open",
+        self.issue = {"number": 7, "node_id": "issue-7", "title": "Improve guide", "body": "Explain this term.", "state": "open",
                       "user": {"login": "writer"}, "labels": [{"name": "autobot"}]}
         self.events = [{"id": 2, "event": "labeled", "label": {"name": "autobot"}, "actor": {"login": "writer"}}]
         self.comments = [{"id": 1, "user": {"login": "writer"}, "body": "/autobot start"}]
         self.refs = {}
+        self.linked_branches = set()
+        self.fail_after_link = False
         self.pr = None
         self.commits = {self.base: {"tree": {"sha": self.base}}}
         self.trees = {self.base: {"docs/guide.md": "Original guide\n", "CONTRIBUTING.md": "Use docs."}}
@@ -73,6 +75,26 @@ class FakeGitHub:
         self.checks_green = True
         self.authorized = True
         self.fail_after_ref = False
+
+    def sync_stage(self, number, stage):
+        """Mirror native stage labels without modifying the enrollment event."""
+        label = "autobot:stage:" + stage.replace("_", "-")
+        self.issue["labels"] = [v for v in self.issue["labels"] if not v["name"].startswith("autobot:stage:")]
+        self.issue["labels"].append({"name": label})
+
+    def branch_linked(self, number, branch):
+        """Expose the fixture's issue Development links."""
+        return branch in self.linked_branches
+
+    def create_linked_branch(self, issue_id, branch, sha):
+        """Simulate native branch creation, including a lost success response."""
+        if branch in self.refs:
+            raise AssertionError("branch already exists")
+        self.refs[branch] = sha
+        self.linked_branches.add(branch)
+        if self.fail_after_link:
+            self.fail_after_link = False
+            raise RuntimeError("lost response after linked branch creation")
 
     def permitted(self, login):
         """Only the seeded writer has permission, unless access was revoked."""

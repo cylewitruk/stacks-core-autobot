@@ -1,0 +1,2 @@
+Avoid repeated QC rationale in Autobot comments while preserving escalation explanations in recorded outcomes and related planner context, and collapse public machine recovery state into an audit section.
+Prevent Autobot progress labels from triggering controller execution and show a readable stage fallback when label synchronization fails.

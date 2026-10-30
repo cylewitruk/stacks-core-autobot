@@ -28,6 +28,9 @@ jobs:
       github.repository == 'cylewitruk/stacks-core-autobot' &&
       github.ref == 'refs/heads/main' && vars.AUTOBOT_ENABLED == 'true' &&
       (github.event_name != 'issues' ||
+       !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
+       !startsWith(github.event.label.name, 'autobot:stage:')) &&
+      (github.event_name != 'issues' ||
        contains(github.event.issue.labels.*.name, 'autobot') || github.event.label.name == 'autobot') &&
       (github.event_name != 'issue_comment' ||
        (!github.event.issue.pull_request &&
