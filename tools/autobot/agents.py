@@ -7,15 +7,19 @@ import uuid
 
 from policy import Blocked, IMAGE, PROVIDER_CREDENTIALS, selected_model
 from bundle import Bundle
+from github import GitHub
+from snapshot import Snapshot, inspection
 
 
 class Agents:
     """Launch bounded, independent inference sessions without host filesystem mounts."""
 
-    def __init__(self, config):
+    def __init__(self, config, archive_loader=None):
         """Use trusted configuration and an operator-pinned image digest."""
         self.config = config
         self.bundle = Bundle()
+        self.archive_loader = archive_loader or GitHub(config["repository"]).archive
+        self.archives = {}
 
     def ask(self, provider, stage, context):
         """Return one JSON response, killing the container on timeout or interruption."""
@@ -43,12 +47,18 @@ class Agents:
         environment = {k: os.environ[k] for k in ("PATH", "DOCKER_HOST", "DOCKER_CONTEXT")
                        if k in os.environ}
         environment[available[0]] = os.environ[available[0]]
-        try:
-            result = subprocess.run(command, input=json.dumps(payload), capture_output=True,
-                                    text=True, timeout=600, env=environment)
-            if result.returncode or len(result.stdout.encode()) > 300000:
-                raise Blocked(f"{provider} failed; output suppressed to protect credentials")
-            return json.loads(result.stdout)
-        finally:
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True,
-                           timeout=30, env=environment)
+        commit, overlays = inspection(context, stage)
+        if commit not in self.archives:
+            # Cache only the current immutable archive within this controller invocation.
+            self.archives = {commit: self.archive_loader(commit)}
+        with Snapshot(image, self.archives[commit], overlays) as snapshot:
+            command[-1:-1] = ["--mount", snapshot.mount()]
+            try:
+                result = subprocess.run(command, input=json.dumps(payload), capture_output=True,
+                                        text=True, timeout=600, env=environment)
+                if result.returncode or len(result.stdout.encode()) > 300000:
+                    raise Blocked(f"{provider} failed; output suppressed to protect credentials")
+                return json.loads(result.stdout)
+            finally:
+                subprocess.run(["docker", "rm", "-f", name], capture_output=True,
+                               timeout=30, env=environment)

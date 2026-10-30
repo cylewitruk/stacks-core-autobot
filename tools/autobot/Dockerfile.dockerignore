@@ -4,6 +4,7 @@
 !tools/autobot/agent_entry.py
 !tools/autobot/bundle.py
 !tools/autobot/policy.py
+!tools/autobot/repository.py
 !.autobot/
 !.autobot/**
 !.agents/

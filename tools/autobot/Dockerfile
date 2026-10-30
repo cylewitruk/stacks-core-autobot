@@ -10,7 +10,7 @@ RUN test -n "$CODEX_VERSION" && test -n "$CLAUDE_VERSION" && test -n "$COPILOT_V
     && npm install -g "@openai/codex@$CODEX_VERSION" \
        "@anthropic-ai/claude-code@$CLAUDE_VERSION" "@github/copilot@$COPILOT_VERSION" \
     && npm cache clean --force
-COPY tools/autobot/agent_entry.py tools/autobot/bundle.py tools/autobot/policy.py /opt/tools/autobot/
+COPY tools/autobot/agent_entry.py tools/autobot/bundle.py tools/autobot/policy.py tools/autobot/repository.py /opt/tools/autobot/
 COPY .autobot /opt/.autobot
 COPY .agents/skills /opt/.agents/skills/
 ENV HOME=/tmp/home CODEX_HOME=/tmp/codex CLAUDE_CONFIG_DIR=/tmp/claude \

@@ -246,7 +246,11 @@ def advance(settings, config, issue):
         token = installation_token(settings, config)
         try:
             environment = {k: os.environ[k] for k in ("PATH", "TMPDIR", "DOCKER_HOST", "DOCKER_CONTEXT") if k in os.environ}
-            environment.update(credentials, GH_TOKEN=token, AUTOBOT_ISSUE=str(issue),
+            home = reports / "controller-home"
+            home.mkdir(mode=0o700)
+            environment.update(credentials, HOME=str(home), XDG_STATE_HOME=str(home / ".local/state"),
+                               XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"),
+                               GH_TOKEN=token, AUTOBOT_ISSUE=str(issue),
                                AUTOBOT_LOCAL_REPORT_DIR=str(reports),
                                AUTOBOT_AGENT_IMAGE=settings["agent_image"], AUTOBOT_EXECUTION_IMAGE=settings["execution_image"])
             result = subprocess.run([sys.executable, "-B", "tools/autobot/controller.py"], cwd=ROOT,

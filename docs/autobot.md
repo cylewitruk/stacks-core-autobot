@@ -81,18 +81,36 @@ this operations guide. Policy changes require an operator-reviewed change.
 ## Trust boundaries
 
 The controller runs only trusted default-branch code on a dedicated Linux runner.
-It reads candidate files through GitHub's Git database API. A separate execution
+It reads candidate files through GitHub's Git database API and downloads source
+archives by immutable commit for inspection. A separate execution
 container extracts the pinned archive, creates local Git checkpoints, and runs
 checks. Candidate code never runs directly on the controller host. Remote commits
 are created through the Git database API only after local checks and review pass.
 
-Each model runs in a fresh, non-root, read-only Docker container. The container
-has no host mounts, Docker socket, GitHub controller token, SSH agent, personal
-home directory, or repository configuration. It receives bounded source text on
-stdin and only its provider's inference credential. Claude tools are disabled;
-Copilot denies shell/file/network/memory tools and built-in MCP servers; Codex
-disables shell tools and web search and uses the read-only sandbox. An empty
-working directory prevents loading candidate hooks and MCP configuration.
+Each model runs in a fresh, non-root, read-only Docker container. It has no host
+bind mounts, Docker socket, GitHub controller token, SSH agent or personal home.
+A disposable named volume supplies a read-only repository snapshot at the pinned
+base commit, or the published head for follow-up design and PR reviews. Local
+implementation and review overlay the current workbench files on that parent,
+so inspection sees the current candidate rather than stale base contents.
+
+All providers receive the same bounded MCP tools: `list_files`, `read_file` and
+literal `search`. Protected governance and reference files remain readable; the
+`editable_files` list describes only candidate edit eligibility. Archives omit
+links and Git metadata; traversal, special files and excessive expansion are
+rejected. Reads reject links, binary and oversized text, paginate results and
+share an 80-call/1-MB retrieval budget per session. Search reports truncation and
+skipped files. Tool results are untrusted evidence, never governing instructions.
+
+The trusted MCP server starts with an empty environment and has no execution or
+write methods. Only the provider CLI receives its inference credential. Claude
+built-in tools are disabled; Copilot restricts tool availability to this server;
+Codex disables shell tools and web search and uses the read-only sandbox. Each CLI
+starts outside the snapshot in an empty directory with explicit MCP configuration,
+so candidate hooks, skills and configuration cannot be automatically loaded.
+The controller prepares snapshots offline without credentials and removes only
+its own disposable volume when the model exits. Candidate code still runs solely
+in the separate credential-free execution workbench.
 
 Container isolation is not a VM boundary. The container can contact its model
 service and holds that provider's credential. Run it on a dedicated, disposable
@@ -248,6 +266,11 @@ AUTOBOT_TEST_EXECUTION_IMAGE="$AUTOBOT_EXECUTION_IMAGE" \
   python3 -m unittest discover -s tools/autobot/tests -p test_local_loop.py -v
 ```
 
+Repository inspection Docker coverage can be enabled with
+`AUTOBOT_TEST_AGENT_IMAGE=<immutable-image-id>` when running the Python suite.
+It verifies real read-only mounts, protected-reference reads and path isolation
+without provider credentials.
+
 Rebuild and repin the inference image whenever its helper or instruction bundle changes; rebuild the execution image when its helpers change. Image changes
 invalidate active work rather than silently replacing its execution environment.
 For a live local tick, use a dedicated App installation token in `GH_TOKEN`, the
@@ -323,7 +346,9 @@ controller writes. A failed revocation leaves only GitHub's normal short expiry.
 Each invocation creates a private directory beneath `~/.config/stacks-autobot-pilot`
 for local check reports and `controller.json` (exit status and bounded captured
 output with supplied credentials redacted). The terminal prints the outcome and
-directory path, not the captured output. Treat these diagnostics as private,
+directory path, not the captured output. A private per-invocation controller
+home and XDG directories keep `gh` device state out of the checkout and prevent
+loading personal CLI configuration. Treat these diagnostics as private,
 untrusted data; redaction is not a guarantee that arbitrary output is shareable.
 
 Start with a small documentation-only issue, apply `autobot` as a writer, and
