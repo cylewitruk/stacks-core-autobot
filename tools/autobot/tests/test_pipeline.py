@@ -16,7 +16,7 @@ from policy import Blocked, digest, merge_reasons, path_allowed, validate_edits,
 
 CONFIG = json.loads((Path(__file__).resolve().parents[3] / ".autobot/config.json").read_text())
 PLAN = {"summary": "Clarify the guide.", "questions": [], "files": ["docs/guide.md"],
-        "steps": ["Add the missing explanation."], "tests": ["Check wording and links."]}
+        "steps": ["Add the missing explanation."], "tests": ["Check wording and links."], "responses": []}
 APPROVE = {"verdict": "approve", "summary": "The change satisfies the plan.", "findings": [], "design_issue": None}
 
 
@@ -40,7 +40,7 @@ class FakeAgents:
                     "risk": "low", "questions": [], "concerns": [],
                     "scope": {"goal_ids": ["G-USABILITY"], "fit": "Clarifies requested operator guidance.", "conflicts": []}}
         if stage == "plan":
-            return deepcopy(PLAN)
+            return {**deepcopy(PLAN), "responses": [{"id": v["id"], "response": "Updated the plan to address this finding."} for v in context.get("open_objections", [])]}
         if stage == "develop":
             return {"summary": "Explain the guide.", "edits": [{"path": "docs/guide.md",
                     "content": "Updated guide " + str(len(self.calls)) + "\n"}], "checks": [], "design_issue": None}
@@ -77,6 +77,10 @@ class FakeGitHub:
         self.checks_green = True
         self.authorized = True
         self.fail_after_ref = False
+
+    def summary(self):
+        """Find the current-state comment independently of conversation chronology."""
+        return next(c for c in self.comments if c["body"].startswith(MARKER))
 
     def sync_stage(self, number, stage):
         """Mirror native stage labels without modifying the enrollment event."""
@@ -309,7 +313,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.tick()["stage"], "merged")
         self.tick()
         self.assertEqual(self.gh.merges, 1)
-        self.assertEqual(len(self.agents.calls), 8)
+        self.assertEqual(len(self.agents.calls), 10)
 
     def test_independent_reviews_and_fix_round(self):
         """Both reviewers assess each head; one failure triggers a bounded new revision."""
@@ -348,7 +352,7 @@ class PipelineTests(unittest.TestCase):
         self.gh.comment("/autobot approve " + state["plan_id"], "outsider")
         self.gh.comment("/autobot approve " + "0" * 64)
         self.assertEqual(self.tick()["stage"], "planned")
-        self.assertEqual(len(self.agents.calls), 4)
+        self.assertEqual(len(self.agents.calls), 6)
 
     def test_stop_and_retry_preserve_progress(self):
         """A writer can pause and resume an approved pipeline without resetting its budget."""
@@ -376,7 +380,7 @@ class PipelineTests(unittest.TestCase):
             self.tick()
         self.assertEqual(self.tick()["stage"], "review")
         self.assertEqual(len(self.gh.refs), 1)
-        self.assertEqual(len(self.agents.calls), 6)
+        self.assertEqual(len(self.agents.calls), 8)
 
     def test_lost_merge_response_reconciles_closed_issue(self):
         """A merge may close the issue before the controller receives its response."""

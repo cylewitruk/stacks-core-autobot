@@ -1,18 +1,19 @@
-"""Run each model in a fresh container with only its own inference credential."""
+"""Run isolated provider containers with optional role-scoped transcript volumes."""
 
 import json
 import os
 import subprocess
 import uuid
 
-from policy import Blocked, IMAGE, PROVIDER_CREDENTIALS, selected_model
+from policy import Blocked, SessionFailure, IMAGE, PROVIDER_CREDENTIALS, selected_model
 from bundle import Bundle
 from github import GitHub
 from snapshot import Snapshot, inspection
+from sessions import SessionVolume
 
 
 class Agents:
-    """Launch bounded, independent inference sessions without host filesystem mounts."""
+    """Launch bounded inference without host filesystem mounts or shared role context."""
 
     def __init__(self, config, archive_loader=None):
         """Use trusted configuration and an operator-pinned image digest."""
@@ -23,6 +24,8 @@ class Agents:
 
     def ask(self, provider, stage, context):
         """Return one JSON response, killing the container on timeout or interruption."""
+        context = dict(context)
+        session = context.pop("controller_session", None)
         model = (context["reviewer_identity"]["model"] if stage == "plan_qc"
                  else selected_model(self.config, provider, stage))
         if not model.strip():
@@ -42,7 +45,11 @@ class Agents:
         if context.get("bundle_id") != self.bundle.identity:
             raise Blocked("agent transport bundle differs from the approved bundle")
         payload = {"provider": provider, "model": model, "stage": stage,
-                   "bundle_id": self.bundle.identity, "context": context}
+                   "bundle_id": self.bundle.identity, "context": context, "session": session}
+        if session:
+            volume = SessionVolume(image, session)
+            volume.ensure()
+            command[-1:-1] = ["--mount", volume.mount()]
         # Docker receives only a named inference secret. GH_TOKEN and host paths stay out.
         environment = {k: os.environ[k] for k in ("PATH", "DOCKER_HOST", "DOCKER_CONTEXT")
                        if k in os.environ}
@@ -59,6 +66,10 @@ class Agents:
                 if result.returncode or len(result.stdout.encode()) > 300000:
                     raise Blocked(f"{provider} failed; output suppressed to protect credentials")
                 return json.loads(result.stdout)
+            except (Blocked, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                if session:
+                    raise SessionFailure("provider session failed; output suppressed to protect credentials") from None
+                raise error
             finally:
                 subprocess.run(["docker", "rm", "-f", name], capture_output=True,
                                timeout=30, env=environment)

@@ -2,6 +2,7 @@
 !tools/
 !tools/autobot/
 !tools/autobot/agent_entry.py
+!tools/autobot/session_entry.py
 !tools/autobot/bundle.py
 !tools/autobot/policy.py
 !tools/autobot/repository.py

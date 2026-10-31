@@ -10,11 +10,13 @@ AI-generated code; this sandbox is not an upstream submission pipeline.
    an issue. Intake checks actionability, risk and fit against the versioned
    project charter. Clarification, rejection and escalation stop implementation.
 2. A planner proposes bounded files, steps and observable tests. Every participating
-   provider/model identity then reviews the **same exact design independently in
-   a fresh session**, including the planner. The roster includes planner,
+   provider/model identity reviews the **same exact design**, with a separate
+   retained session per reviewer during cooperative revisions. The roster includes planner,
    implementer, intake QC, local reviewer and all configured PR reviewers;
-   duplicate provider/model pairs vote once. Reviewers do not see peers' votes.
-3. All roster members must approve. One dissenter returns consolidated objections
+   duplicate provider/model pairs vote once per round. Reviewers do not see peers' votes.
+3. All roster members must approve cooperatively, then approve again in separate
+   fresh sessions without prior votes or objection responses. One dissenter in
+   either phase returns consolidated objections
    to the planner; a revision invalidates every prior vote. High risk escalates;
    rejection and missing intent stop. Manual mode adds writer approval after
    consensus and cannot waive the charter or unanimous design gate.
@@ -95,6 +97,28 @@ A disposable named volume supplies a read-only repository snapshot at the pinned
 base commit, or the published head for follow-up design and PR reviews. Local
 implementation and review overlay the current workbench files on that parent,
 so inspection sees the current candidate rather than stale base contents.
+
+Planner, cooperative design reviewer and implementer sessions retain their own
+CLI transcript volume across turns. Scope includes repository, issue, role,
+provider/model, requirements, base, governance, image and reopen cycle; a changed
+scope starts a new session. Local code reviews and final design/PR reviews remain
+fresh. The entry point appends changed context through explicit CLI session IDs,
+never a global "latest session" lookup. Session files are private runner data;
+only scope digests, turn counters and hashed completion receipts enter public audit state. No GitHub credential
+is mounted or forwarded, and repository MCP tools cannot read session storage.
+
+Completed turns can replay their cached response after a lost transport reply.
+A failed or ambiguous turn, mismatched counter or missing resumed volume starts
+that role in a new isolated session with full current context. Recovery retries
+once immediately, charges the same model-call budget, and preserves approval
+gates. Two failures block the task with a fresh session prepared for `/autobot retry`.
+Completed turn receipts are checkpointed before local checks can be interrupted.
+Transcripts are limited to 64 MiB at turn admission and isolated per role. They
+are retained for diagnosis; operators can list only these volumes with
+`docker volume ls --filter label=stacks-autobot=session` and remove selected
+inactive volumes after the issue finishes. Do not prune unrelated Docker data.
+Losing this cache cannot authorize progress. Prefix-cache savings are not assumed;
+resuming sessions preserves context but actual cache hits depend on the provider.
 
 All providers receive the same bounded MCP tools: `list_files`, `read_file` and
 literal `search`. Protected governance and reference files remain readable; the
@@ -485,11 +509,26 @@ The labels provide native filtering and can be used when organizing a project
 board. Projects integration requires separate access and configuration; milestones
 remain available for human-defined release grouping.
 
-The bot's comment shows concise decisions, questions and review evidence, with
+The bot's editable summary shows the current reviewer roster, phase and verdicts, with
 links to **Autobot implementation plan** (`plan`) and **Autobot audit state**
 (`generic`) issue artifacts. It does not repeat full plan steps or the JSON
 checkpoint. Stage-label failures show a temporary fallback in the comment, cleared
 when synchronization recovers even on idle tasks.
+
+Separate App-authored comments record intake, each model's review in each round,
+plan publication and responses to named objections, local validation, PR reviews
+and controller decisions. Each review identifies its provider/model, plan or
+commit, phase and round. Bot comments do not become issue requirements or peer
+review input. The controller never rewrites these events; GitHub users can still
+edit or delete comments, so they are a conversation record, not approval authority.
+A bounded checkpoint outbox references plans and reports already in state, with
+content hashes protecting pending publications. Exact App-authored markers
+reconcile lost responses without duplicate comments. Failed or conflicting
+publications block work and independently update the summary and attention label;
+restore an edited pending event before retrying. Published comments retain full
+narrative text, while checkpoints keep bounded excerpts and publication receipts.
+Plans, findings, unresolved objections and approval bindings remain intact; resolved
+objections and unused votes are pruned. The total checkpoint size limit still applies.
 
 The audit artifact is authoritative and contains exact commit, plan, image and
 approval bindings, budgets and interrupted-operation intent. The plan artifact is

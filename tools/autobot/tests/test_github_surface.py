@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from controller import Controller, ESCALATION_REASON, STATE_PREFIX
+from controller import Controller, ESCALATION_REASON, STATE_PREFIX, MARKER
 from github import GitHub
 from policy import Blocked
 from test_pipeline import CONFIG, FakeAgents, FakeGitHub, FakeWorkspace
@@ -45,7 +45,7 @@ class SurfaceTests(unittest.TestCase):
         """One visible rationale and native stage label replace the duplicated status text."""
         controller = self.controller()
         controller.advance(7)
-        body = self.gh.comments[-1]["body"]
+        body = self.gh.summary()["body"]
         visible = body.split("<details>", 1)[0]
         rationale = controller.state["qc"]["intake"]["rationale"]
         self.assertEqual(visible.count(rationale), 1)
@@ -58,7 +58,7 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(self.controller().state, controller.state)
         controller.state.update(stage="blocked", reason="Transport unavailable")
         controller.save()
-        self.assertIn("Status: Transport unavailable", self.gh.comments[-1]["body"].split("<details>")[0])
+        self.assertIn("Status: Transport unavailable", self.gh.summary()["body"].split("<details>")[0])
 
     def test_escalation_shows_rationale_once_and_keeps_action(self):
         """High risk and explicit escalations retain one explanation plus the required action."""
@@ -74,7 +74,7 @@ class SurfaceTests(unittest.TestCase):
                 self.assertEqual(recovered["reason"], expected)
                 self.assertEqual(recovered["outcomes"][-1]["status"], "escalated")
                 self.assertEqual(recovered["outcomes"][-1]["reason"], expected)
-                visible = self.gh.comments[-1]["body"].split("<details>")[0]
+                visible = self.gh.summary()["body"].split("<details>")[0]
                 self.assertEqual(visible.count(report["rationale"]), 1)
                 self.assertIn("Status: " + ESCALATION_REASON, visible)
                 self.assertFalse(self.gh.refs)
@@ -88,12 +88,12 @@ class SurfaceTests(unittest.TestCase):
         controller.save()
         recovered = self.controller()
         self.assertEqual(recovered.state, controller.state)
-        visible = self.gh.comments[-1]["body"].split("<details>")[0]
+        visible = self.gh.summary()["body"].split("<details>")[0]
         self.assertEqual(visible.count(rationale), 1)
         self.assertIn("Status: " + ESCALATION_REASON, visible)
         recovered.state["reason"] = "Transport failed after QC: " + rationale
         recovered.save()
-        self.assertIn("Status: " + recovered.state["reason"], self.gh.comments[-1]["body"])
+        self.assertIn("Status: " + recovered.state["reason"], self.gh.summary()["body"])
 
     def test_old_expanded_state_remains_readable(self):
         """Changing the comment presentation does not reset existing budgets or evidence."""
@@ -101,7 +101,7 @@ class SurfaceTests(unittest.TestCase):
         controller.advance(7)
         state = deepcopy(controller.state)
         self.gh.artifacts.clear()
-        self.gh.comments[-1]["body"] = "<!-- stacks-autobot:v1 -->\nOld summary" + STATE_PREFIX + json.dumps(state) + "\n```\n"
+        self.gh.summary()["body"] = "<!-- stacks-autobot:v1 -->\nOld summary" + STATE_PREFIX + json.dumps(state) + "\n```\n"
         self.assertEqual(self.controller().state, state)
 
     def test_labels_are_retryable_display_and_cannot_authorize_execution(self):
@@ -111,14 +111,14 @@ class SurfaceTests(unittest.TestCase):
                 patch("sys.stderr", new_callable=io.StringIO) as output:
             controller.advance(7)
         self.assertNotIn("private transport error", output.getvalue())
-        visible = self.gh.comments[-1]["body"].split("<details>")[0]
+        visible = self.gh.summary()["body"].split("<details>")[0]
         self.assertIn("Stage: **plan** (label sync unavailable).", visible)
         self.assertNotIn("private transport error", visible)
         self.gh.issue["labels"].append({"name": "autobot:stage:implement"})
         recovered = self.controller()
         self.assertEqual(recovered.state["stage"], "plan")
         recovered.save()
-        self.assertNotIn("Stage:", self.gh.comments[-1]["body"].split("<details>")[0])
+        self.assertNotIn("Stage:", self.gh.summary()["body"].split("<details>")[0])
         self.assertNotIn({"name": "autobot:stage:implement"}, self.gh.issue["labels"])
         self.assertIn({"name": "autobot"}, self.gh.issue["labels"])
         self.assertEqual(recovered.state["calls"], 1)
@@ -143,14 +143,14 @@ class SurfaceTests(unittest.TestCase):
                 patch("sys.stderr", new_callable=io.StringIO):
             self.assertFalse(resumed.advance(7))
         self.assertEqual(self.controller().state, state)
-        visible = self.gh.comments[-1]["body"].split("<details>")[0]
+        visible = self.gh.summary()["body"].split("<details>")[0]
         self.assertIn("Stage: **escalated** (label sync unavailable).", visible)
         self.assertEqual(len(self.agents.calls), 1)
         with patch.object(self.gh, "repo", wraps=self.gh.repo) as repo:
             self.assertFalse(self.controller().advance(7))
         writes = [call for call in repo.call_args_list if len(call.args) > 1 and call.args[1] == "PATCH"]
         self.assertEqual(len(writes), 1)
-        self.assertNotIn("label sync unavailable", self.gh.comments[-1]["body"].split("<details>")[0])
+        self.assertNotIn("label sync unavailable", self.gh.summary()["body"].split("<details>")[0])
         self.assertEqual(self.controller().state, state)
         with patch.object(self.gh, "repo", wraps=self.gh.repo) as repo:
             self.assertFalse(self.controller().advance(7))

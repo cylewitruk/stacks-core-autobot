@@ -17,6 +17,9 @@ LIMIT = 60000
 
 
 DIAGNOSTICS = {
+    'conversation_publish': 'Conversation publication failed; pending events are preserved for retry.',
+    'conversation_conflict': 'A pending conversation event was edited or duplicated; restore it before retrying.',
+    'failure_display': 'The controller stopped, but could not fully publish its failure status.',
     'artifact_request': 'Issue artifact request failed; retry without resetting state.',
     'artifact_collection': 'Cannot establish issue artifacts; retry without resetting state.',
     'artifact_identity': 'Artifact identity, authorship or version is invalid; reconcile manually.',
@@ -237,6 +240,9 @@ class Checkpoints:
             lines += ["Plan: `" + state["plan_id"] + "`", "Base: `" + state["base"] + "`", "", state["plan"]["summary"], ""]
             for key in ("questions", "files", "steps", "tests"):
                 lines += ["## " + key.capitalize(), ""] + ["- " + item for item in state["plan"][key]] + [""]
+            if state["plan"].get("responses"):
+                lines += ["## Review responses", ""] + [
+                    f"- **{item['id']}**: {item['response']}" for item in state["plan"]["responses"]] + [""]
         else:
             lines += ["The previous plan is superseded. A new plan is required before implementation.", ""]
         return "\n".join(lines)
