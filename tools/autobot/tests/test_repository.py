@@ -171,8 +171,9 @@ class RepositoryTests(unittest.TestCase):
         """Models cannot substitute the inspection revision and local reviews see their candidate."""
         agents = FakeAgents()
         controller = Controller(FakeGitHub(CONFIG), agents, CONFIG)
-        controller.state = {"base": "a" * 40, "calls": 0}
-        with patch.object(controller, "save"):
+        controller.state = {"base": "a" * 40, "calls": 0, "issue": 7, "requirements": {},
+                            "bundle_id": "bundle", "agent_image": "image", "config_digest": "config"}
+        with patch.object(controller, "save"), patch.object(controller, "checkpoint"):
             controller.ask("claude", "plan", {"repository_commit": "f" * 40})
             self.assertEqual(agents.calls[-1][2]["repository_commit"], "a" * 40)
             controller.state["head"] = "b" * 40

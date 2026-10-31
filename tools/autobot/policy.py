@@ -38,6 +38,10 @@ class Blocked(ValueError):
     """An input cannot safely advance the pipeline."""
 
 
+class SessionFailure(Blocked):
+    """A provider turn or its local transcript needs a new isolated session."""
+
+
 def digest(value):
     """Bind approvals to a canonical JSON value."""
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -135,12 +139,14 @@ def approval_binding(state, config):
                    "requirements": state["requirements"], "config": state["config_digest"],
                    "image": state["agent_image"], "execution_image": state["execution_image"],
                    "bundle": state.get("bundle_id"), "charter": state.get("charter_id"),
-                   "generation": state.get("design_generation"), "roster": design_roster(config),
+                   "generation": state.get("design_generation"), "phase": state.get("design_phase"), "roster": design_roster(config),
                    "parent": state.get("design_parent"), "changed_files": state.get("approved_accumulated_files", [])})
 
 
-def consensus_valid(state, config):
+def consensus_valid(state, config, require_fresh=True):
     """Require complete, fresh unanimous judgments; code cannot prove semantic alignment."""
+    if require_fresh and state.get("design_phase") != "fresh":
+        return False
     roster = design_roster(config)
     votes = state.get("design_votes", {})
     if not state.get("bundle_id") or not state.get("charter_id") or set(votes) != {r["id"] for r in roster}:
@@ -200,8 +206,12 @@ def path_allowed(path):
 
 def validate_plan(plan):
     """Require a bounded, reviewable plan or explicit clarification questions."""
-    if set(plan) != {"summary", "questions", "files", "steps", "tests"}:
+    if set(plan) != {"summary", "questions", "files", "steps", "tests", "responses"}:
         raise Blocked("invalid plan fields")
+    if not isinstance(plan["responses"], list) or any(
+            not isinstance(v, dict) or set(v) != {"id", "response"}
+            or not all(isinstance(t, str) and t.strip() for t in v.values()) for v in plan["responses"]):
+        raise Blocked("invalid planner objection responses")
     for key in ("questions", "files", "steps", "tests"):
         if not isinstance(plan[key], list) or not all(isinstance(v, str) for v in plan[key]):
             raise Blocked("invalid plan list")

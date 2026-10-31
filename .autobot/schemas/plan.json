@@ -27,6 +27,25 @@
       "items": {
         "type": "string"
       }
+    },
+    "responses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "response": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "response"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
@@ -34,7 +53,8 @@
     "questions",
     "files",
     "steps",
-    "tests"
+    "tests",
+    "responses"
   ],
   "additionalProperties": false
 }

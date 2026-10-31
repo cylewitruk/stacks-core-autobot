@@ -7,16 +7,19 @@ from pathlib import Path
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from agents import Agents
+import conversation
+import sessions
 from bundle import Bundle
 from checkpoints import CheckpointError, Checkpoints, MARKER, STATE_PREFIX
 from checkpoint_health import sync_checkpoint_health
 from github import GitHub
 from local import LocalWorkspace, available_checks, resource_exhausted
 from scheduler import QueueScan
-from policy import (Blocked, approval_binding, approval_valid, digest, local_evidence_valid, merge_reasons,
+from policy import (Blocked, SessionFailure, approval_binding, approval_valid, digest, local_evidence_valid, merge_reasons,
                     consensus_valid, design_roster, path_allowed, required_local_checks, selected_model,
                     instruction_matches, validate_design_issue, validate_edits, validate_plan, validate_qc, validate_review)
 
@@ -77,13 +80,35 @@ class Controller:
         self.stage_sync_warned = False
         self.stage_fallback = False
 
-    def save(self):
+    def checkpoint(self):
+        """Persist authoritative progress independently of conversation delivery."""
+        conversation.compact(self.state)
+        self.checkpoints.save(self.state)
+
+    def save(self, publish_events=True):
         """Persist audit and plan artifacts before publishing their concise comment summary."""
         state = self.state
         self.record_outcome()
-        self.checkpoints.save(state)
+        if publish_events:
+            conversation.transition(state)
+        self.checkpoint()
+        self.sync_stage()
+        if publish_events and conversation.publish(state, self.gh, self.config):
+            self.checkpoint()
         lines = [MARKER, "## Autobot", ""]
         shown_rationales = set()
+        if state.get("plan_id"):
+            lines += [f"Design round {state.get('design_generation', 0) + 1} · "
+                      f"{state.get('design_phase', 'cooperative')} review", ""]
+            for member in design_roster(self.config):
+                vote = state.get("design_votes", {}).get(member["id"], {})
+                decision = vote.get("report", {}).get("decision", "pending")
+                lines += [f"- {member['provider']} / `{member['model']}`: **{decision}**"]
+            lines += [""]
+        latest = state.get("conversation", {}).get("latest")
+        if latest:
+            lines += [f"[Latest conversation event](https://github.com/{self.config['repository']}/issues/"
+                      f"{state['issue']}#issuecomment-{latest})", ""]
         for stage, report in state.get("qc", {}).items():
             shown_rationales.add(report["rationale"].strip())
             lines += ["**QC " + stage + ": " + report["decision"] + "**", "", report["rationale"], ""]
@@ -121,7 +146,6 @@ class Controller:
             self.comment_id = result["id"]
         self.checkpoints.dirty = False
         self.stage_fallback = False
-        self.sync_stage()
         if self.stage_sync_warned:
             fallback = "Stage: **" + state["stage"] + "** (label sync unavailable).\n"
             body = body.replace("## Autobot\n", "## Autobot\n\n" + fallback, 1)
@@ -209,9 +233,35 @@ class Controller:
             raise Blocked("context exceeds v1 limit; narrow the issue")
         if self.state["calls"] >= self.config["max_model_calls"]:
             raise Blocked("model-call budget exhausted")
-        self.state["calls"] += 1
-        self.save()
-        return self.agents.ask(provider, stage, context)
+        for attempt in range(2):
+            if self.state["calls"] >= self.config["max_model_calls"]:
+                raise Blocked("model-call budget exhausted")
+            session = sessions.prepare(self.state, self.config, provider, stage, context)
+            request = {**context, "controller_session": session} if session else context
+            self.state["calls"] += 1
+            self.save()
+            try:
+                response = self.agents.ask(provider, stage, request)
+            except SessionFailure:
+                if not session:
+                    raise
+                sessions.restart(self.state, session)
+                conversation.queue(self.state, "Controller · session restarted",
+                    f"{provider} · {stage}: the prior session could not continue. "
+                    "The next attempt uses a new isolated session with full context. "
+                    "Consumed calls and approval requirements are unchanged.")
+                self.save()
+                if attempt:
+                    raise Blocked("provider session failed twice; a fresh session is prepared for retry") from None
+                continue
+            if session:
+                current = self.state["sessions"][session["role"]]
+                current["turn"] += 1
+                current["completed"] = {"call": self.state["calls"], "request": digest(context),
+                                        "response": digest(response)}
+                # Execution can be interrupted before the normal stage save.
+                self.checkpoint()
+            return response
 
     def permitted(self, login):
         """Cache fresh writer permissions within this invocation only."""
@@ -257,7 +307,8 @@ class Controller:
                       "config_digest": digest(self.config), "bundle_id": self.bundle.identity,
                       "bundle_hashes": self.bundle.hashes, "charter_id": digest(self.bundle.charter),
                       "charter": self.bundle.charter, "design_generation": 0,
-                      "design_reopens": 0, "design_votes": {}, "design_history": []}
+                      "design_reopens": 0, "design_votes": {}, "design_history": [],
+                      "design_phase": "cooperative"}
         self.state["prior_outcomes"] = self.retrieve_outcomes()
         self.save()
 
@@ -271,6 +322,8 @@ class Controller:
             return False
         self.state["plan_revisions"] += 1
         self.state.update(stage=stage, reason=reason)
+        conversation.queue(self.state, "Controller · revision requested",
+                           f"Revision {self.state['plan_revisions']} of {self.config['max_plan_revisions']}.\n\n{reason}")
         return True
 
     def invalidate_design(self, reason):
@@ -285,6 +338,8 @@ class Controller:
                     "decision": v["report"]["decision"], "report_digest": digest(v["report"]),
                     "concerns": v["report"]["concerns"]} for v in state.get("design_votes", {}).values()]})
         state["design_generation"] += 1
+        state["design_phase"] = "cooperative"
+        state.pop("cooperative_votes", None)
         state["design_votes"] = {}
         state.pop("approval", None)
         state.pop("local_evidence", None)
@@ -295,6 +350,9 @@ class Controller:
         state = self.state
         if state.get("pending"):
             raise Blocked("prepared publication must be reconciled before reopening design")
+        conversation.queue(state, "Design reopened · " + source,
+                           f"Plan `{state['plan_id']}`\n\n{issue['explanation']}\n\n"
+                           + "\n".join("- " + evidence for evidence in issue["evidence"]))
         state.setdefault("reopen_history", []).append({"source": source, "issue": issue,
             "head": state.get("head"), "plan": state["plan_id"]})
         state["design_feedback"] = issue
@@ -399,15 +457,21 @@ class Controller:
         state = self.state
         context = self.context()
         member = None
+        phase = state.get("design_phase", "cooperative")
         if stage == "plan_qc":
             roster = design_roster(self.config)
             member = next((m for m in roster if m["id"] not in state["design_votes"]), None)
             if member is None:
-                if not consensus_valid(state, self.config):
+                if not consensus_valid(state, self.config, require_fresh=False):
                     raise Blocked("design votes are missing, stale or contradictory")
                 self.finish_consensus()
                 self.save()
                 return
+            context["review_phase"] = phase
+            if phase == "cooperative":
+                context["own_objections"] = [v for v in state.get("objections", []) if v["reviewer"] == member["id"]]
+            else:
+                context["plan"] = {k: v for k, v in context["plan"].items() if k != "responses"}
             context.update(files=self.files(state["base"], state["plan"]["files"]),
                            design_binding=approval_binding(state, self.config), reviewer_identity=member,
                            accumulated_changed_files=state.get("changed_files", []),
@@ -423,7 +487,27 @@ class Controller:
         state.setdefault("qc_history", []).append({"stage": stage, "decision": report["decision"],
             "risk": report["risk"], "rationale": report["rationale"][:500], "report_digest": digest(report),
             "base": state["base"], "plan": state.get("plan_id"), "provider": provider,
-            "model": member["model"] if member else selected_model(self.config, provider, stage)})
+            "model": member["model"] if member else selected_model(self.config, provider, stage),
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "round": state["design_generation"] + 1, "phase": phase if member else "intake"})
+        identity = member or {"id": digest([provider, "intake"]), "provider": provider,
+                              "model": selected_model(self.config, provider, stage)}
+        conversation.queue(state, f"{provider} / {identity['model']} · {stage} · {report['decision']}",
+                           source=("qc", stage), kind="qc", details={
+                               "plan": state.get("plan_id", "intake"), "round": state["design_generation"] + 1,
+                               "phase": phase if member else "intake", "reviewer": identity["id"],
+                               "resolved": [v["id"] for v in state.get("objections", [])
+                                            if v["reviewer"] == identity["id"] and not v["resolved"]]})
+        if member:
+            objections = state.setdefault("objections", [])
+            if report["decision"] == "approve":
+                for objection in objections:
+                    if objection["reviewer"] == member["id"]:
+                        objection["resolved"] = True
+            for index, concern in enumerate(report["concerns"], 1):
+                identifier = f"D{state['design_generation'] + 1}-{member['id'][:8]}-{phase}-c{index}"
+                objections.append({"id": identifier, "reviewer": member["id"], "text": concern, "resolved": False})
+
         state["reason"] = report["rationale"]
         decision = report["decision"]
         if member:
@@ -451,22 +535,29 @@ class Controller:
     def finish_consensus(self):
         """Authorize implementation only after a complete current unanimous round."""
         state = self.state
-        if not consensus_valid(state, self.config):
+        if not consensus_valid(state, self.config, require_fresh=False):
             raise Blocked("unanimous design consensus missing or stale")
+        if state.get("design_phase") != "fresh":
+            state.update(design_phase="fresh", design_votes={})
+            conversation.queue(state, "Controller · cooperative consensus reached",
+                               f"Plan `{state['plan_id']}` now requires fresh independent approval from every reviewer.")
+            return
+        conversation.queue(state, "Controller · fresh design approval complete",
+                           f"Every participating model approved plan `{state['plan_id']}` in a fresh session.")
         if state.get("mode") == "manual":
             state["stage"] = "planned"
         else:
             state.update(stage="implement", approval={"kind": "consensus", "plan": state["plan_id"],
                                                        "binding": approval_binding(state, self.config)})
 
-    def suspend(self, stage, reason=None):
+    def suspend(self, stage, reason=None, publish_events=True):
         """Pause work without replacing an earlier resume target on repeated failures."""
         if self.state["stage"] not in ("blocked", "stopped"):
             self.state["retry_stage"] = self.state["stage"]
         self.state["stage"] = stage
         if reason is not None:
             self.state["reason"] = reason
-        self.save()
+        self.save(publish_events=publish_events)
 
     def commands(self, comments):
         """Apply exact writer commands; plan approval is bound to its full digest."""
@@ -525,6 +616,7 @@ class Controller:
         """Triage and attach a structured plan without making code changes."""
         context = self.context()
         context["design_feedback"] = self.state.get("design_feedback")
+        context["open_objections"] = [v for v in self.state.get("objections", []) if not v["resolved"]]
         context["editable_files"] = [p for p in self.tree(self.state["base"]) if path_allowed(p)]
         if self.state.get("head"):
             paths = self.state["changed_files"]
@@ -532,6 +624,9 @@ class Controller:
                            accumulated_after=self.files(self.state["head"], paths))
         plan = self.ask(self.config["planner"], "plan", context)
         validate_plan(plan)
+        expected = {v["id"] for v in context["open_objections"]}
+        if {v["id"] for v in plan["responses"]} != expected or len(plan["responses"]) != len(expected):
+            raise Blocked("planner must respond to every open objection exactly once")
         if self.state.get("head") and not plan["questions"]:
             if not set(self.state.get("changed_files", [])).issubset(plan["files"]):
                 raise Blocked("revised scope does not reconcile the accumulated PR diff")
@@ -541,9 +636,14 @@ class Controller:
         if not self.state.get("head"):
             self.state["branch"] = f"autobot/issue-{self.issue['number']}-{self.state['plan_id'][:12]}"
         self.state["design_votes"] = {}
+        self.state["design_phase"] = "cooperative"
         self.state["approved_accumulated_files"] = self.state.get("changed_files", [])
         self.state["design_parent"] = self.state.get("head")
         self.state["stage"] = "clarify" if plan["questions"] else "plan_qc"
+        conversation.queue(self.state,
+                           f"{self.config['planner']} / {selected_model(self.config, self.config['planner'], 'plan')} · plan published",
+                           source=("plan",), kind="plan", details={"plan": self.state["plan_id"],
+                                                                 "round": self.state["design_generation"] + 1})
         self.save()
 
     def local_report(self, attempt, report):
@@ -552,7 +652,11 @@ class Controller:
         compact = {k: v for k, v in report.items() if k not in ("edits", "checks")}
         compact["checks"] = [{k: v for k, v in c.items() if k != "output"} for c in report.get("checks", [])]
         compact.update(attempt=attempt, round=state["round"], run_id=os.environ.get("GITHUB_RUN_ID"))
+        changed = state.get("local_status") != compact
         state["local_status"] = compact
+        if changed:
+            conversation.queue(state, "Local validation", source=("local_status",), kind="local",
+                               details={"reviewer": self.config["local_reviewer"]})
         directory = os.environ.get("AUTOBOT_LOCAL_REPORT_DIR")
         if directory:
             path = Path(directory)
@@ -737,6 +841,8 @@ class Controller:
         state.update(head=pending["head"], pr=pr["number"], reviews={}, stage="review")
         state["changed_files"] = [f["filename"] for f in self.gh.pages(f"pulls/{pr['number']}/files")]
         del state["pending"]
+        conversation.queue(state, "Controller · PR published",
+                           f"PR #{pr['number']} · commit `{state['head']}`. Local checks and review passed.")
         self.save()
 
     def review(self):
@@ -751,10 +857,18 @@ class Controller:
             report = self.ask(provider, "review", context)
             validate_review(report)
             if report["verdict"] == "reopen":
+                state["review_event"] = report
+                source = ("review_event",)
+            else:
+                report.update(head=state["head"], model=self.config["models"][provider] or "CLI default")
+                state["reviews"][provider] = report
+                source = ("reviews", provider)
+            conversation.queue(state, f"{provider} / {self.config['models'][provider]} · PR review · {report['verdict']}",
+                               source=source, kind="review",
+                               details={"head": state["head"], "round": state["round"] + 1})
+            if report["verdict"] == "reopen":
                 self.reopen_design(report["design_issue"], "pr_review:" + provider)
                 return
-            report.update(head=state["head"], model=self.config["models"][provider] or "CLI default")
-            state["reviews"][provider] = report
             self.save()
         if len(state["reviews"]) == len(self.config["reviewers"]):
             if all(r["verdict"] == "approve" for r in state["reviews"].values()):
@@ -835,7 +949,8 @@ class Controller:
                            or self.state.get("bundle_hashes") != self.bundle.hashes):
             raise Blocked("trusted charter, role, skill or schema bundle changed; operator reconciliation required")
         self.sync_stage()
-        if self.stage_sync_warned or self.stage_fallback or self.checkpoints.dirty:
+        if (self.stage_sync_warned or self.stage_fallback or self.checkpoints.dirty
+                or self.state and self.state.get("conversation", {}).get("pending")):
             self.save()
         if self.state and self.state.get("pr") and self.state["stage"] not in ("merged", "observed_merged"):
             pr = self.gh.repo(f"pulls/{self.state['pr']}")
@@ -926,14 +1041,18 @@ def main():
                 break
         except Exception as error:
             # Do not publish raw CLI/provider errors: they can contain credentials or injected text.
-            if isinstance(error, CheckpointError):
+            if isinstance(error, CheckpointError) and not isinstance(error, conversation.PublicationError):
                 sync_checkpoint_health(gh, config, number, failed=True, error=error)
             elif controller.state:
                 reason = str(error) if isinstance(error, Blocked) else "Transport or schema failure; inspect runner health."
                 try:
-                    controller.suspend("blocked", reason)
-                except CheckpointError as checkpoint_error:
-                    sync_checkpoint_health(gh, config, number, failed=True, error=checkpoint_error)
+                    controller.suspend("blocked", reason, publish_events=False)
+                except Exception as display_error:
+                    diagnostic = display_error if isinstance(display_error, CheckpointError) else CheckpointError("failure_display")
+                    sync_checkpoint_health(gh, config, number, failed=True, error=diagnostic)
+                else:
+                    if isinstance(error, conversation.PublicationError):
+                        sync_checkpoint_health(gh, config, number, failed=True, error=error)
             print(f"Autobot stopped safely on issue {number}", file=sys.stderr)
             raise SystemExit(1) from None
 

@@ -62,7 +62,7 @@ class CheckpointTests(unittest.TestCase):
                 self.gh.artifacts.clear()
                 body = MARKER + '\nLegacy checkpoint\n' + ('<details>\n' if collapsed else '')
                 body += STATE_PREFIX + json.dumps(state) + '\n```\n' + ('</details>' if collapsed else '')
-                self.gh.comments[-1]['body'] = body
+                self.gh.summary()['body'] = body
                 migrated = self.controller()
                 self.assertEqual(migrated.state, state)
                 migrated.state['calls'] += 1
@@ -71,9 +71,9 @@ class CheckpointTests(unittest.TestCase):
                 self.assertEqual(legacy_state(history[-1]['body'])['state'], state)
                 self.assertEqual(self.controller().state, migrated.state)
                 self.assertEqual(migrated.state['approval'], state['approval'])
-                self.assertNotIn(STATE_PREFIX, self.gh.comments[-1]['body'])
-                self.assertIn('[Automation audit state]', self.gh.comments[-1]['body'])
-                self.assertIn('[Implementation plan]', self.gh.comments[-1]['body'])
+                self.assertNotIn(STATE_PREFIX, self.gh.summary()['body'])
+                self.assertIn('[Automation audit state]', self.gh.summary()['body'])
+                self.assertIn('[Implementation plan]', self.gh.summary()['body'])
 
     def test_plan_is_versioned_view_and_unchanged_saves_do_not_add_versions(self):
         """Plan details move out of the comment and remain subordinate to checkpoint evidence."""
@@ -82,7 +82,7 @@ class CheckpointTests(unittest.TestCase):
         plan = self.artifact(PLAN_NAME)
         for step in PLAN['steps']:
             self.assertIn(step, plan['artifact']['body'])
-            self.assertNotIn(step, self.gh.comments[-1]['body'])
+            self.assertNotIn(step, self.gh.summary()['body'])
         for item in PLAN['files'] + PLAN['tests']:
             self.assertIn(item, plan['artifact']['body'])
         history = deepcopy(plan['versions'])
@@ -114,7 +114,7 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(recovered.state['stage'], 'intake')
         recovered.save()
         self.assertEqual(len(self.gh.artifacts[7]), 1)
-        self.assertEqual(len(self.gh.comments), 1)
+        self.assertEqual(len([c for c in self.gh.comments if c["body"].startswith(MARKER)]), 1)
         self.assertEqual(self.controller().state['calls'], 0)
 
     def test_interrupted_migration_keeps_legacy_and_recovers_newer_artifact(self):
@@ -122,8 +122,8 @@ class CheckpointTests(unittest.TestCase):
         controller = self.start()
         state = deepcopy(controller.state)
         self.gh.artifacts.clear()
-        self.gh.comments[-1]['body'] = MARKER + STATE_PREFIX + json.dumps(state) + '\n```\n'
-        old_comment = self.gh.comments[-1]['body']
+        self.gh.summary()['body'] = MARKER + STATE_PREFIX + json.dumps(state) + '\n```\n'
+        old_comment = self.gh.summary()['body']
         resumed = self.controller()
         resumed.state['calls'] += 1
         original = self.gh.repo
@@ -137,7 +137,7 @@ class CheckpointTests(unittest.TestCase):
 
         with patch.object(self.gh, 'repo', side_effect=lose), self.assertRaises(CheckpointError):
             resumed.save()
-        self.assertEqual(self.gh.comments[-1]['body'], old_comment)
+        self.assertEqual(self.gh.summary()['body'], old_comment)
         recovered = self.controller()
         self.assertEqual(recovered.state['calls'], state['calls'] + 1)
         recovered.save()
@@ -168,9 +168,9 @@ class CheckpointTests(unittest.TestCase):
                 self.assertEqual(recovered.state, controller.state)
                 recovered.save()
                 self.assertEqual(len(self.gh.artifacts[7]), 2)
-                self.assertEqual(len(self.gh.comments), 1)
+                self.assertEqual(len([c for c in self.gh.comments if c["body"].startswith(MARKER)]), 1)
                 self.assertEqual(len(self.agents.calls), 1)
-                self.assertIn('[Implementation plan]', self.gh.comments[-1]['body'])
+                self.assertIn('[Implementation plan]', self.gh.summary()['body'])
 
     def test_missing_replaced_or_duplicate_audit_stops_before_model_calls(self):
         """Never reinitialize a task after losing its pinned artifact identity."""
@@ -215,7 +215,7 @@ class CheckpointTests(unittest.TestCase):
                         body = AUDIT_MARKER + '\ninvalid'
                     value['artifact']['body'] = value['versions'][0]['body'] = body
                 else:
-                    self.gh.comments[-1]['body'] = self.gh.comments[-1]['body'].replace('"digest":"', '"digest":"bad')
+                    self.gh.summary()['body'] = self.gh.summary()['body'].replace('"digest":"', '"digest":"bad')
                 calls = len(self.agents.calls)
                 with self.assertRaises(CheckpointError):
                     Controller(self.gh, self.agents, self.config, FakeWorkspace).advance(7)
@@ -469,6 +469,8 @@ class CheckpointTests(unittest.TestCase):
         expected = deepcopy(controller.state)
         recovered = self.controller()
         self.assertEqual(recovered.state, expected)
+        recovered.save()
+        self.assertFalse(recovered.state["conversation"]["pending"])
         before = deepcopy(self.gh.artifacts)
         recovered.save()
         self.assertEqual(self.gh.artifacts, before)
@@ -512,7 +514,7 @@ class CheckpointTests(unittest.TestCase):
         """Newest checkpoints recover beyond 30 saves; a missing historical proof never resets state."""
         controller = self.start()
         controller.advance(7)
-        old_comment = deepcopy(self.gh.comments[0])
+        old_comment = deepcopy(self.gh.summary())
         for index in range(40):
             controller.state['reason'] = f'Progress {index}'
             controller.save()
@@ -529,7 +531,7 @@ class CheckpointTests(unittest.TestCase):
 
         with patch.object(self.gh, 'repo', side_effect=windowed):
             self.assertEqual(self.controller().state, state)
-            self.gh.comments[0] = old_comment
+            self.gh.summary().update(old_comment)
             with self.assertRaises(CheckpointError) as caught:
                 self.controller()
         self.assertEqual(caught.exception.code, 'audit_history')

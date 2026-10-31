@@ -159,13 +159,13 @@ class ConsensusTests(unittest.TestCase):
         self.assertEqual(len(roster), 5)
         self.assertEqual(self.tick()["stage"], "plan")
         self.assertEqual(self.tick()["stage"], "plan_qc")
-        for index in range(len(roster)):
+        for index in range(2 * len(roster)):
             state = self.tick()
-            self.assertEqual(state["stage"], "implement" if index == len(roster) - 1 else "plan_qc")
+            self.assertEqual(state["stage"], "implement" if index == 2 * len(roster) - 1 else "plan_qc")
         self.assertTrue(approval_valid(state, self.config))
         votes = [(p, c) for p, stage, c in self.agents.calls if stage == "plan_qc"]
         self.assertEqual({c["reviewer_identity"]["id"] for _, c in votes}, {m["id"] for m in roster})
-        self.assertEqual(len({c["design_binding"] for _, c in votes}), 1)
+        self.assertEqual(len({c["design_binding"] for _, c in votes}), 2)
         for _, context in votes:
             self.assertFalse({"design_votes", "qc", "qc_feedback", "design_feedback", "design_authorization"} & context.keys())
         planner = next(m for m in roster if "plan" in m["roles"])
@@ -189,7 +189,7 @@ class ConsensusTests(unittest.TestCase):
                          ["Add an error-path regression."])
         state = self.reach("implement")
         self.assertNotEqual(next(iter(state["design_votes"].values()))["binding"], old_binding)
-        self.assertEqual(state["calls"], 7)
+        self.assertEqual(state["calls"], 9)
 
     def test_missing_stale_wrong_identity_and_extra_votes_block(self):
         """Completion requires exactly the bound roster, not a count or approval-shaped data."""
@@ -245,8 +245,7 @@ class ConsensusTests(unittest.TestCase):
         self.gh.comment("/autobot approve " + state["plan_id"])
         state = self.tick()
         self.assertEqual(state["stage"], "plan_qc")
-        state = self.tick()
-        self.assertEqual(state["stage"], "planned")
+        state = self.reach("planned")
         self.gh.comment("/autobot approve " + state["plan_id"])
         self.assertEqual(self.tick()["stage"], "publish")
         self.assertEqual(self.agents.calls[0][1], "intake")
