@@ -11,6 +11,8 @@ from urllib.parse import quote
 
 from agents import Agents
 from bundle import Bundle
+from checkpoints import CheckpointError, Checkpoints, MARKER, STATE_PREFIX
+from checkpoint_health import sync_checkpoint_health
 from github import GitHub
 from local import LocalWorkspace, available_checks, resource_exhausted
 from scheduler import QueueScan
@@ -18,8 +20,6 @@ from policy import (Blocked, approval_binding, approval_valid, digest, local_evi
                     consensus_valid, design_roster, path_allowed, required_local_checks, selected_model,
                     instruction_matches, validate_design_issue, validate_edits, validate_plan, validate_qc, validate_review)
 
-MARKER = "<!-- stacks-autobot:v1 -->"
-STATE_PREFIX = "\n```json\n"
 ESCALATION_REASON = "High-risk or consequential work requires human intervention."
 PROVIDERS = {"claude", "codex", "copilot"}
 
@@ -66,6 +66,7 @@ class Controller:
         """Inject transports so complete lifecycles can be tested without credentials."""
         self.gh, self.agents, self.config = github, agents, config
         self.comment_id = None
+        self.checkpoints = None
         self.state = None
         self.issue = None
         self.permissions = {}
@@ -77,9 +78,10 @@ class Controller:
         self.stage_fallback = False
 
     def save(self):
-        """Persist machine state and a readable plan/review summary in one bot-owned comment."""
+        """Persist audit and plan artifacts before publishing their concise comment summary."""
         state = self.state
         self.record_outcome()
+        self.checkpoints.save(state)
         lines = [MARKER, "## Autobot", ""]
         shown_rationales = set()
         for stage, report in state.get("qc", {}).items():
@@ -89,8 +91,7 @@ class Controller:
         if state.get("plan"):
             plan = state["plan"]
             lines += [plan["summary"], "", "Plan: `" + state["plan_id"] + "`", ""]
-            for key in ("questions", "files", "steps", "tests"):
-                lines += ["**" + key.capitalize() + "**", ""] + ["- " + v for v in plan[key]] + [""]
+            lines += ["- " + question for question in plan["questions"]] + [""]
             if state["stage"] == "planned":
                 lines += ["A writer can approve with `/autobot approve " + state["plan_id"] + "`.", ""]
         if state.get("pr"):
@@ -109,21 +110,22 @@ class Controller:
             reason = ESCALATION_REASON
         if reason and reason not in shown_rationales:
             lines += ["Status: " + reason, ""]
-        lines += ["<details>", "<summary>Automation audit state (public; used for recovery)</summary>", ""]
-        body = "\n".join(lines) + STATE_PREFIX + json.dumps(state, sort_keys=True) + "\n```\n\n</details>\n"
+        lines += self.checkpoints.links()
+        body = "\n".join(lines)
         if len(body.encode()) > 60000:
-            raise Blocked("durable state exceeds comment limit")
+            raise Blocked("summary exceeds comment limit")
         if self.comment_id:
-            self.gh.repo(f"issues/comments/{self.comment_id}", "PATCH", {"body": body})
+            self.checkpoints.request(f"issues/comments/{self.comment_id}", "PATCH", {"body": body})
         else:
-            result = self.gh.repo(f"issues/{self.issue['number']}/comments", "POST", {"body": body})
+            result = self.checkpoints.request(f"issues/{self.issue['number']}/comments", "POST", {"body": body})
             self.comment_id = result["id"]
+        self.checkpoints.dirty = False
         self.stage_fallback = False
         self.sync_stage()
         if self.stage_sync_warned:
             fallback = "Stage: **" + state["stage"] + "** (label sync unavailable).\n"
             body = body.replace("## Autobot\n", "## Autobot\n\n" + fallback, 1)
-            self.gh.repo(f"issues/comments/{self.comment_id}", "PATCH", {"body": body})
+            self.checkpoints.request(f"issues/comments/{self.comment_id}", "PATCH", {"body": body})
             self.stage_fallback = True
 
     def sync_stage(self):
@@ -138,17 +140,12 @@ class Controller:
             print("Autobot stage label sync failed; durable state retained for retry.", file=sys.stderr)
 
     def load(self, comments):
-        """Trust only the configured App's single, well-formed state comment."""
-        matches = [c for c in comments if c["user"]["login"] == self.config["bot_login"]
-                   and c["body"].startswith(MARKER)]
-        if len(matches) > 1:
-            raise Blocked("multiple state comments; manual reconciliation required")
-        if matches:
-            self.comment_id = matches[0]["id"]
-            self.state = json.loads(matches[0]["body"].rsplit(STATE_PREFIX, 1)[1].rsplit("\n```", 1)[0])
-            if self.state["version"] != 2 or self.state["issue"] != self.issue["number"]:
-                raise Blocked("state identity mismatch")
-            self.stage_fallback = matches[0]["body"].startswith(MARKER + "\n## Autobot\n\nStage: **")
+        """Load verified artifacts or an unmigrated legacy checkpoint from the configured App."""
+        self.checkpoints = Checkpoints(self.gh, self.config, self.issue["number"])
+        self.state = self.checkpoints.load(comments)
+        comment = self.checkpoints.comment
+        self.comment_id = comment["id"] if comment else None
+        self.stage_fallback = bool(comment and comment["body"].startswith(MARKER + "\n## Autobot\n\nStage: **"))
 
     def tree(self, sha):
         """Fetch a complete tree; never silently treat truncation as missing files."""
@@ -346,25 +343,20 @@ class Controller:
         for issue, comments in issues[:self.config["max_outcome_issues"]]:
             if issue == state["issue"]:
                 continue
-            for comment in comments[:10]:
-                if (comment.get("user", {}).get("login") != self.config["bot_login"]
-                        or not comment.get("body", "").startswith(MARKER)
-                        or len(comment["body"].encode()) > 60000):
+            try:
+                prior = Checkpoints(self.gh, self.config, issue).load(comments[:10])
+                if prior is None:
                     continue
-                try:
-                    prior = json.loads(comment["body"].rsplit(STATE_PREFIX, 1)[1].rsplit("\n```", 1)[0])
-                    if prior.get("issue") != issue or prior.get("version") != 2:
-                        continue
-                    outcome = prior.get("outcomes", [])[-1]
-                    relevance = len(words & set(re.findall(r"[a-z]{4,}", outcome["title"].lower())))
-                    if not relevance or outcome.get("version") != 1:
-                        continue
-                    lesson = {k: outcome.get(k) for k in ("issue", "status", "title", "reason", "plan_summary",
-                                                         "goals", "files", "head", "plan", "bundle", "completion")}
-                    if len(json.dumps(lesson).encode()) <= 4000:
-                        lessons.append((relevance, issue, lesson))
-                except (ValueError, KeyError, IndexError, TypeError):
+                outcome = prior.get("outcomes", [])[-1]
+                relevance = len(words & set(re.findall(r"[a-z]{4,}", outcome["title"].lower())))
+                if not relevance or outcome.get("version") != 1:
                     continue
+                lesson = {k: outcome.get(k) for k in ("issue", "status", "title", "reason", "plan_summary",
+                                                     "goals", "files", "head", "plan", "bundle", "completion")}
+                if len(json.dumps(lesson).encode()) <= 4000:
+                    lessons.append((relevance, issue, lesson))
+            except (CheckpointError, ValueError, KeyError, IndexError, TypeError):
+                continue
         lessons.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [lesson for _, _, lesson in lessons[:self.config["max_outcome_lessons"]]]
 
@@ -843,7 +835,7 @@ class Controller:
                            or self.state.get("bundle_hashes") != self.bundle.hashes):
             raise Blocked("trusted charter, role, skill or schema bundle changed; operator reconciliation required")
         self.sync_stage()
-        if self.stage_sync_warned or self.stage_fallback:
+        if self.stage_sync_warned or self.stage_fallback or self.checkpoints.dirty:
             self.save()
         if self.state and self.state.get("pr") and self.state["stage"] not in ("merged", "observed_merged"):
             pr = self.gh.repo(f"pulls/{self.state['pr']}")
@@ -927,13 +919,21 @@ def main():
     for number in numbers:
         controller = Controller(gh, Agents(config), config)
         try:
-            if controller.advance(number):
+            advanced = controller.advance(number)
+            if controller.state:
+                sync_checkpoint_health(gh, config, number, failed=False)
+            if advanced:
                 break
         except Exception as error:
             # Do not publish raw CLI/provider errors: they can contain credentials or injected text.
-            if controller.state:
+            if isinstance(error, CheckpointError):
+                sync_checkpoint_health(gh, config, number, failed=True, error=error)
+            elif controller.state:
                 reason = str(error) if isinstance(error, Blocked) else "Transport or schema failure; inspect runner health."
-                controller.suspend("blocked", reason)
+                try:
+                    controller.suspend("blocked", reason)
+                except CheckpointError as checkpoint_error:
+                    sync_checkpoint_health(gh, config, number, failed=True, error=checkpoint_error)
             print(f"Autobot stopped safely on issue {number}", file=sys.stderr)
             raise SystemExit(1) from None
 

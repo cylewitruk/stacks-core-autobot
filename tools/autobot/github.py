@@ -5,6 +5,7 @@ import subprocess
 from urllib.parse import quote
 
 STAGE_LABEL_PREFIX = "autobot:stage:"
+ATTENTION_LABEL = "autobot:attention"
 STAGES = {"intake", "clarify", "plan", "plan_qc", "planned", "implement", "publish", "review",
           "gates", "merging", "merged", "observed_merged", "blocked", "stopped", "rejected", "escalated"}
 
@@ -48,16 +49,28 @@ class GitHub:
         wanted = STAGE_LABEL_PREFIX + stage.replace("_", "-")
         current = {label["name"] for label in self.pages(f"issues/{number}/labels")}
         if wanted not in current:
-            if self.known_labels is None:
-                self.known_labels = {label["name"] for label in self.pages("labels")}
-            if wanted not in self.known_labels:
-                self.repo("labels", "POST", {"name": wanted, "color": "8250df",
-                    "description": "Autobot progress display; does not grant execution or merge approval."})
-                self.known_labels.add(wanted)
+            self.ensure_label(wanted, "8250df", "Autobot progress display; does not grant execution or merge approval.")
             self.repo(f"issues/{number}/labels", "POST", {"labels": [wanted]})
         for old in sorted(current - {wanted}):
             if old.startswith(STAGE_LABEL_PREFIX):
                 self.repo(f"issues/{number}/labels/" + quote(old, safe=""), "DELETE")
+
+    def ensure_label(self, name, color, description):
+        """Create a display label only when it is absent from the repository."""
+        if self.known_labels is None:
+            self.known_labels = {label["name"] for label in self.pages("labels")}
+        if name not in self.known_labels:
+            self.repo("labels", "POST", {"name": name, "color": color, "description": description})
+            self.known_labels.add(name)
+
+    def sync_attention(self, number, failed):
+        """Set checkpoint health independently of durable stage and enrollment labels."""
+        current = {label["name"] for label in self.pages(f"issues/{number}/labels")}
+        if failed and ATTENTION_LABEL not in current:
+            self.ensure_label(ATTENTION_LABEL, "d4c5f9", "Autobot checkpoint needs attention; display only.")
+            self.repo(f"issues/{number}/labels", "POST", {"labels": [ATTENTION_LABEL]})
+        elif not failed and ATTENTION_LABEL in current:
+            self.repo(f"issues/{number}/labels/" + quote(ATTENTION_LABEL, safe=""), "DELETE")
 
     def branch_linked(self, number, branch):
         """Check the issue's native Development links with bounded pagination and repo identity."""

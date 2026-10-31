@@ -41,7 +41,7 @@ class SurfaceTests(unittest.TestCase):
                 return controller
         self.fail("design did not reach approval")
 
-    def test_summary_deduplicates_rationale_and_collapses_public_state(self):
+    def test_summary_deduplicates_rationale_and_links_public_state(self):
         """One visible rationale and native stage label replace the duplicated status text."""
         controller = self.controller()
         controller.advance(7)
@@ -51,7 +51,9 @@ class SurfaceTests(unittest.TestCase):
         self.assertEqual(visible.count(rationale), 1)
         self.assertNotIn("Status:", visible)
         self.assertNotIn("Stage:", visible)
-        self.assertIn("Automation audit state (public; used for recovery)", body)
+        self.assertIn("[Automation audit state]", body)
+        self.assertNotIn(STATE_PREFIX, body)
+        self.assertNotIn("<details>", body)
         self.assertIn({"name": "autobot:stage:plan"}, self.gh.issue["labels"])
         self.assertEqual(self.controller().state, controller.state)
         controller.state.update(stage="blocked", reason="Transport unavailable")
@@ -98,6 +100,7 @@ class SurfaceTests(unittest.TestCase):
         controller = self.controller()
         controller.advance(7)
         state = deepcopy(controller.state)
+        self.gh.artifacts.clear()
         self.gh.comments[-1]["body"] = "<!-- stacks-autobot:v1 -->\nOld summary" + STATE_PREFIX + json.dumps(state) + "\n```\n"
         self.assertEqual(self.controller().state, state)
 

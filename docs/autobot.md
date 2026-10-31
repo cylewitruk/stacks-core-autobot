@@ -287,8 +287,9 @@ python3 tools/autobot/controller.py
 
 This command **writes to GitHub**. Do not run it concurrently with Actions; disable
 `AUTOBOT_ENABLED` and wait for any existing job to finish first. Do not use a
-personal owner token as the controller: state comments must belong to the configured
-App bot. Credentials are read from the environment, never from committed files.
+personal owner token as the controller: checkpoint artifacts and summary comments
+must belong to the configured App bot. Credentials are read from the environment,
+never from committed files.
 
 ## Supervised local pilot
 
@@ -448,11 +449,12 @@ attempt first retains its defect evidence and invalidates prior approvals. No su
 inferred from these controller limits.
 
 Success, observed external merges, blocked/failure, stopped, rejected and escalated outcomes are recorded
-with plan/head/bundle and evidence digests in the App-owned state comment. At new
-task creation, retrieval reads at most ten recently updated enrolled issues and
-the first ten comments on each, accepting only the configured bot's versioned
-state. It selects at most three outcomes with matching title terms. This bounded
-heuristic can miss useful history. Relevant records reach intake/planning as
+with plan/head/bundle and evidence digests in the App-owned audit artifact. At new
+task creation, retrieval reads at most ten recently updated enrolled issues, their
+artifacts and the first ten comments on each. Both artifact checkpoints and legacy
+comment checkpoints are supported; invalid or unavailable history is skipped.
+It selects at most three outcomes with matching title terms. This bounded heuristic
+can miss useful history. Relevant records reach intake/planning as
 `prior_outcomes_untrusted`; contradictory suggestions cannot grant permissions,
 replace the charter, or bypass scope and consensus checks. No candidate auto-edits
 skills, workflows or the charter in response to a proposed lesson.
@@ -483,16 +485,48 @@ The labels provide native filtering and can be used when organizing a project
 board. Projects integration requires separate access and configuration; milestones
 remain available for human-defined release grouping.
 
-The bot's comment shows decisions, questions, the plan and review evidence without
-repeating the QC rationale as status. If label synchronization fails, the comment
-shows a stage fallback that clears when label synchronization recovers, including
-on idle tasks. Its JSON checkpoint is collapsed under **Automation audit state**.
-It is still public and readable through GitHub's API; collapsing content does not
-make it private. The checkpoint stores exact commit,
-plan, image and approval bindings, remaining budgets and interrupted-operation
-intent. Labels, project fields and milestones cannot replace that recovery data.
-A private checkpoint would require a separate private storage/access design.
-Existing expanded comments remain readable, with budgets and evidence preserved.
+The bot's comment shows concise decisions, questions and review evidence, with
+links to **Autobot implementation plan** (`plan`) and **Autobot audit state**
+(`generic`) issue artifacts. It does not repeat full plan steps or the JSON
+checkpoint. Stage-label failures show a temporary fallback in the comment, cleared
+when synchronization recovers even on idle tasks.
+
+The audit artifact is authoritative and contains exact commit, plan, image and
+approval bindings, budgets and interrupted-operation intent. The plan artifact is
+a generated view of that checkpoint; human edits are overwritten on the next
+invocation, with the edits retained in artifact history. Request plan changes in
+issue comments. Editing the view cannot authorize work or change approval bindings.
+Both artifacts are public in a public repository. Updates retain GitHub artifact version history.
+The [measured API response](autobot-artifact-measurements.md) includes only the latest 30 versions. The audit envelope
+pins the verified plan artifact's ID and number so later edits remain repairable
+when its first version is no longer returned. Older unbound plans are adopted only
+with verified first-version provenance; missing proof stops execution.
+The controller uses the issue artifacts REST API with the App's existing Issues
+write permission; the preview API must be available to advance a task.
+
+On the next save, an existing expanded or collapsed v2 comment checkpoint is
+preserved as the audit artifact's first version before any newer state is written.
+Only then is the comment replaced with links and a hidden artifact reference.
+Lost responses recover the existing artifact; a stale comment cannot roll back
+newer artifact state. Missing/replaced audit artifacts, duplicate bot artifacts,
+foreign audit edits or conflicting versions stop execution without resetting
+budgets or approvals.
+
+Writes verify creator/editor attribution and read back the exact stored version.
+Unchanged artifacts are not rewritten. Plans are verified on each load; repeated
+saves of an unchanged view avoid another history read. Edits during an invocation
+are repaired on the next invocation. Audit writes always recheck the current
+version and confirm readback. GitHub's API provides no documented atomic
+compare-and-swap here: the existing Actions concurrency group and local pilot lock
+must still enforce one controller writer. Never run the two controllers concurrently.
+Do not edit or delete the audit artifact or recovery reference manually.
+
+Checkpoint failures set `autobot:attention` and update a separate App-owned health
+notice, without replacing uncertain state or changing the last known stage label.
+Reporting is best effort if GitHub is unavailable; repeated failures reuse the
+notice. Diagnostics show a stable code and fixed controller text, never raw API or
+provider errors. A successful invocation clears the label and marks the notice recovered.
+Attention-label events and bot comments cannot trigger controller execution.
 
 A linked Development branch is reserved only after current design approval, at the
 approved base SHA, using GitHub's `createLinkedBranch` mutation. Intent is saved
@@ -504,8 +538,8 @@ it to the issue through the existing closing reference. Projects are not require
 for this native Development link.
 
 Issue label/edit events and author/writer comments can wake the controller.
-Stage-label additions and removals are excluded so progress display updates do
-not advance the controller.
+Stage- and attention-label additions and removals are excluded so display updates
+do not advance the controller.
 Each invocation advances one stage or one reviewer. The schedule rotates through
 labelled open issues and up to ten recently updated labelled closed issues in
 issue-number order. It inspects at most `max_open_issues` candidates per run and
@@ -516,10 +550,10 @@ candidate hosts the cursor. A host change reuses that host's cursor, or starts
 from the lowest issue number if it has none. Explicit issue invocations
 do not read or move the cursor. Duplicate or malformed bot-owned cursors block
 scanning for operator reconciliation.
-GitHub may delay scheduled runs. Commands and state live in GitHub comments, so
-runner disks and queued workflow events are not the source of truth. The App owns
-one state comment per issue; duplicate state comments stop processing. Treat the
-comment as operational state and do not edit it manually during active work.
+GitHub may delay scheduled runs. Commands remain in issue comments; durable state
+lives in issue artifacts, so runner disks and queued events are not the source of
+truth. The App maintains one summary comment per issue; duplicate marked comments
+stop processing. The queue cursor remains a separate bot-owned comment.
 
 ## Gates, CI and recovery
 
