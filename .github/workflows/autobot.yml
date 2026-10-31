@@ -29,7 +29,8 @@ jobs:
       github.ref == 'refs/heads/main' && vars.AUTOBOT_ENABLED == 'true' &&
       (github.event_name != 'issues' ||
        !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
-       !startsWith(github.event.label.name, 'autobot:stage:')) &&
+       (!startsWith(github.event.label.name, 'autobot:stage:') &&
+        !startsWith(github.event.label.name, 'autobot:attention'))) &&
       (github.event_name != 'issues' ||
        contains(github.event.issue.labels.*.name, 'autobot') || github.event.label.name == 'autobot') &&
       (github.event_name != 'issue_comment' ||

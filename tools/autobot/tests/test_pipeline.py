@@ -64,6 +64,8 @@ class FakeGitHub:
         self.comments = [{"id": 1, "user": {"login": "writer"}, "body": "/autobot start"}]
         self.refs = {}
         self.linked_branches = set()
+        self.artifacts = {}
+        self.artifact_counter = 0
         self.fail_after_link = False
         self.pr = None
         self.commits = {self.base: {"tree": {"sha": self.base}}}
@@ -81,6 +83,12 @@ class FakeGitHub:
         label = "autobot:stage:" + stage.replace("_", "-")
         self.issue["labels"] = [v for v in self.issue["labels"] if not v["name"].startswith("autobot:stage:")]
         self.issue["labels"].append({"name": label})
+
+    def sync_attention(self, number, failed):
+        """Mirror checkpoint health without changing stage or enrollment."""
+        self.issue["labels"] = [v for v in self.issue["labels"] if v["name"] != "autobot:attention"]
+        if failed:
+            self.issue["labels"].append({"name": "autobot:attention"})
 
     def branch_linked(self, number, branch):
         """Expose the fixture's issue Development links."""
@@ -111,6 +119,8 @@ class FakeGitHub:
 
     def pages(self, path, key=None):
         """Expose fully paginated evidence as the real adapter does."""
+        if path.endswith("/artifacts"):
+            return [deepcopy(item["artifact"]) for item in self.artifacts.get(int(path.split("/")[1]), {}).values()]
         if path == "issues/7/comments":
             return deepcopy(self.comments)
         if path == "issues/7/events":
@@ -137,6 +147,27 @@ class FakeGitHub:
 
     def repo(self, path, method="GET", data=None):
         """Implement only the controller's explicit GitHub operations."""
+        if "/artifacts" in path:
+            parts = path.split("/")
+            items = self.artifacts.setdefault(int(parts[1]), {})
+            if method == "POST":
+                self.artifact_counter += 1
+                number = self.artifact_counter
+                item = {"id": number + 1000, "number": number, **deepcopy(data),
+                        "creator": {"login": self.config["bot_login"]},
+                        "updated_by_actor": {"login": self.config["bot_login"]}}
+                items[number] = {"artifact": item, "versions": []}
+            else:
+                number = int(parts[3])
+                if method == "GET":
+                    return deepcopy(items[number])
+                item = items[number]["artifact"]
+                item.update(deepcopy(data))
+            item["updated_by_actor"] = {"login": self.config["bot_login"]}
+            versions = items[number]["versions"]
+            versions.insert(0, {"version": len(versions) + 1, "name": item["name"], "body": item["body"],
+                                "actor": deepcopy(item["updated_by_actor"])})
+            return deepcopy(item)
         if path == "issues/7":
             return deepcopy(self.issue)
         if path == "git/ref/heads/main":

@@ -1,0 +1,1 @@
+Store Autobot plans and recovery checkpoints in versioned GitHub issue artifacts, preserving legacy checkpoints and rejecting missing, conflicting or externally edited state.

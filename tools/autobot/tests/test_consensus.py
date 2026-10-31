@@ -451,8 +451,7 @@ class ConsensusTests(unittest.TestCase):
                     state = self.tick()
                     self.assertEqual(state["stage"], "escalated")
                     # Give the completed fixture a historical identity; preserve its actual evidence.
-                    prior = json.loads(self.gh.comments[-1]["body"].rsplit(STATE_PREFIX, 1)[1]
-                                       .rsplit("\n```", 1)[0])
+                    prior = deepcopy(state)
                     prior["issue"] = 3
                     prior["outcomes"][-1]["issue"] = 3
                     comment = deepcopy(self.gh.comments[-1])

@@ -51,6 +51,8 @@ class WorkflowEventTests(unittest.TestCase):
                     ('autobot:stage:plan', True, False),
                     ('autobot:stage:implement', True, False),
                     ('AUTOBOT:STAGE:PLAN', True, False),
+                    ('autobot:attention', True, False),
+                    ('AUTOBOT:ATTENTION', True, False),
                     ('autobot', action == 'labeled', True),
                     ('bug', True, True), ('bug', False, False)):
                 with self.subTest(action=action, label=label, enrolled=enrolled):
