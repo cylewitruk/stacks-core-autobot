@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run gh as this repository's owner without switching the global active account.
+set -eu
+unset GH_TOKEN GITHUB_TOKEN
+token=$(gh auth token --hostname github.com --user cylewitruk)
+GH_TOKEN="$token" exec gh "$@"

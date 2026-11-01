@@ -1,0 +1,70 @@
+{
+  "repository": "cylewitruk/stacks-core-autobot",
+  "base": "main",
+  "bot_login": "concurro[bot]",
+  "autonomous": true,
+  "qc": "codex",
+  "qc_model": "",
+  "max_plan_revisions": 2,
+  "planner": "claude",
+  "implementer": "codex",
+  "local_reviewer": "claude",
+  "local_review_model": "",
+  "max_local_fix_rounds": 2,
+  "local_timeout_seconds": 2400,
+  "local_check_timeout_seconds": 900,
+  "reviewers": [
+    "claude",
+    "codex"
+  ],
+  "models": {
+    "claude": "claude-opus-5-5",
+    "codex": "gpt-6.1-sol",
+    "copilot": ""
+  },
+  "merge_enabled": false,
+  "required_checks": [
+    "Concurro Rust"
+  ],
+  "policy_documents": [
+    "CONTRIBUTING.md",
+    ".github/copilot-instructions.md",
+    ".agents/skills/stacks-pr-review/SKILL.md"
+  ],
+  "execution_profiles": [
+    "rust"
+  ],
+  "paths": {
+    "editable_extensions": [
+      ".rs",
+      ".md",
+      ".added",
+      ".changed",
+      ".fixed",
+      ".removed"
+    ],
+    "protected_names": [],
+    "protected_name_prefixes": [],
+    "protected_prefixes": [
+      "tools/",
+      "contrib/",
+      "scripts/"
+    ],
+    "protected_files": [
+      "docs/concurro.md"
+    ],
+    "autonomous_merge_prefixes": [
+      "docs/",
+      "changelog.d/"
+    ]
+  },
+  "max_fix_rounds": 2,
+  "max_model_calls": 48,
+  "max_context_bytes": 350000,
+  "max_open_issues": 10,
+  "max_design_reopens": 2,
+  "max_outcome_issues": 10,
+  "max_outcome_lessons": 3,
+  "max_validation_repairs": 3,
+  "max_review_repairs": 4
+}

@@ -1,0 +1,88 @@
+# Example caller workflow for a target repository. Pin the engine by full commit SHA;
+# the target's default branch decides which engine code runs.
+name: Concurro controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to advance; leave blank to scan the concurro label
+        type: string
+        required: false
+  issue_comment:
+    types: [created, edited]
+  issues:
+    types: [opened, labeled, unlabeled, edited, reopened, closed]
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions: {}
+
+# GitHub keeps only one pending run. Commands remain in issue comments, and the
+# scheduled scan recovers commands on labelled issues that lost their queued run.
+concurrency:
+  group: concurro-controller
+  cancel-in-progress: false
+
+jobs:
+  advance:
+    if: >-
+      github.repository == 'cylewitruk/stacks-core-autobot' &&
+      github.ref == 'refs/heads/main' && vars.CONCURRO_ENABLED == 'true' &&
+      (github.event_name != 'issues' ||
+       !contains(fromJSON('["labeled","unlabeled"]'), github.event.action) ||
+       (!startsWith(github.event.label.name, 'concurro:stage:') &&
+        !startsWith(github.event.label.name, 'concurro:attention'))) &&
+      (github.event_name != 'issues' ||
+       contains(github.event.issue.labels.*.name, 'concurro') || github.event.label.name == 'concurro') &&
+      (github.event_name != 'issue_comment' ||
+       (!github.event.issue.pull_request &&
+        github.event.comment.user.type != 'Bot' &&
+        (contains(github.event.issue.labels.*.name, 'concurro') || startsWith(github.event.comment.body, '/concurro ')) &&
+        (github.event.comment.user.login == github.event.issue.user.login ||
+         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))))
+    runs-on: [self-hosted, linux, x64, concurro-controller]
+    environment: concurro
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted target configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create repository-scoped controller token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.CONCURRO_APP_ID }}
+          private-key: ${{ secrets.CONCURRO_APP_PRIVATE_KEY }}
+          owner: cylewitruk
+          repositories: stacks-core-autobot
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-administration: read
+      - name: Advance one durable stage
+        # Reviewed engine commit (full SHA); upgrade through a reviewed change.
+        uses: concurro/concurro@d7bde86e76a7cf6d25b87a6f16caf7f08f6fcaab
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          CONCURRO_ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          CONCURRO_AGENT_IMAGE: ${{ vars.CONCURRO_AGENT_IMAGE }}
+          CONCURRO_EXECUTION_IMAGE: ${{ vars.CONCURRO_EXECUTION_IMAGE }}
+          CONCURRO_LOCAL_REPORT_DIR: ${{ runner.temp }}/concurro-local
+          CODEX_API_KEY: ${{ secrets.CONCURRO_CODEX_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CONCURRO_CLAUDE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CONCURRO_ANTHROPIC_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.CONCURRO_COPILOT_TOKEN }}
+      - name: Preserve local test and review diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: concurro-local-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/concurro-local
+          if-no-files-found: ignore
+          retention-days: 7
