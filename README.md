@@ -42,11 +42,13 @@ cd stacks-core
 
 ### 3. Build the project
 
+`--locked` builds exactly the dependency versions in `Cargo.lock`, as release builds do.
+
 ```bash
 # Fully optimized release build
-cargo build --release
+cargo build --locked --release
 # Faster but less optimized build. Necessary if < 16 GB RAM
-cargo build --profile release-lite
+cargo build --locked --profile release-lite
 ```
 
 _Note on building_: you may set `RUSTFLAGS` to build binaries for your native cpu:
