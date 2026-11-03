@@ -42,6 +42,16 @@ cd stacks-core
 
 ### 3. Build the project
 
+For everyday development, use a regular debug build:
+
+```bash
+cargo build
+```
+
+It skips the link-time optimization used by the release profiles, so rebuilds are much faster; optimized builds aren't needed for development.
+
+When you need optimized binaries (for example, to run or benchmark a node), use one of the release profiles:
+
 ```bash
 # Fully optimized release build
 cargo build --release
