@@ -471,12 +471,13 @@ mod tests {
         assert_eq!(serialize(&5000u32).ok(), Some(vec![136u8, 19, 0, 0]));
         assert_eq!(serialize(&500000u32).ok(), Some(vec![32u8, 161, 7, 0]));
         assert_eq!(serialize(&168430090u32).ok(), Some(vec![10u8, 10, 10, 10]));
-        // TODO: test negative numbers
         assert_eq!(serialize(&1i32).ok(), Some(vec![1u8, 0, 0, 0]));
         assert_eq!(serialize(&256i32).ok(), Some(vec![0u8, 1, 0, 0]));
         assert_eq!(serialize(&5000i32).ok(), Some(vec![136u8, 19, 0, 0]));
         assert_eq!(serialize(&500000i32).ok(), Some(vec![32u8, 161, 7, 0]));
         assert_eq!(serialize(&168430090i32).ok(), Some(vec![10u8, 10, 10, 10]));
+        assert_eq!(serialize(&-1i32).ok(), Some(vec![0xFFu8, 0xFF, 0xFF, 0xFF]));
+        assert_eq!(serialize(&i32::MIN).ok(), Some(vec![0u8, 0, 0, 0x80]));
         // u64
         assert_eq!(serialize(&1u64).ok(), Some(vec![1u8, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!(
@@ -495,7 +496,6 @@ mod tests {
             serialize(&723401728380766730u64).ok(),
             Some(vec![10u8, 10, 10, 10, 10, 10, 10, 10])
         );
-        // TODO: test negative numbers
         assert_eq!(serialize(&1i64).ok(), Some(vec![1u8, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!(
             serialize(&256i64).ok(),
@@ -512,6 +512,14 @@ mod tests {
         assert_eq!(
             serialize(&723401728380766730i64).ok(),
             Some(vec![10u8, 10, 10, 10, 10, 10, 10, 10])
+        );
+        assert_eq!(
+            serialize(&-1i64).ok(),
+            Some(vec![0xFFu8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        );
+        assert_eq!(
+            serialize(&i64::MIN).ok(),
+            Some(vec![0u8, 0, 0, 0, 0, 0, 0, 0x80])
         );
     }
 
@@ -643,12 +651,13 @@ mod tests {
         );
         let failure32: Result<u32, _> = deserialize(&[1u8, 2, 3]);
         assert!(failure32.is_err());
-        // TODO: test negative numbers
         assert_eq!(deserialize(&[0xABu8, 0xCD, 0, 0]).ok(), Some(0xCDABi32));
         assert_eq!(
             deserialize(&[0xA0u8, 0x0D, 0xAB, 0x2D]).ok(),
             Some(0x2DAB0DA0i32)
         );
+        assert_eq!(deserialize(&[0xFFu8, 0xFF, 0xFF, 0xFF]).ok(), Some(-1i32));
+        assert_eq!(deserialize(&[0u8, 0, 0, 0x80]).ok(), Some(i32::MIN));
         let failurei32: Result<i32, _> = deserialize(&[1u8, 2, 3]);
         assert!(failurei32.is_err());
 
@@ -663,7 +672,6 @@ mod tests {
         );
         let failure64: Result<u64, _> = deserialize(&[1u8, 2, 3, 4, 5, 6, 7]);
         assert!(failure64.is_err());
-        // TODO: test negative numbers
         assert_eq!(
             deserialize(&[0xABu8, 0xCD, 0, 0, 0, 0, 0, 0]).ok(),
             Some(0xCDABi64)
@@ -671,6 +679,14 @@ mod tests {
         assert_eq!(
             deserialize(&[0xA0u8, 0x0D, 0xAB, 0xCD, 0x99, 0, 0, 0x99]).ok(),
             Some(-0x66ffff663254f260i64)
+        );
+        assert_eq!(
+            deserialize(&[0xFFu8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).ok(),
+            Some(-1i64)
+        );
+        assert_eq!(
+            deserialize(&[0u8, 0, 0, 0, 0, 0, 0, 0x80]).ok(),
+            Some(i64::MIN)
         );
         let failurei64: Result<i64, _> = deserialize(&[1u8, 2, 3, 4, 5, 6, 7]);
         assert!(failurei64.is_err());
