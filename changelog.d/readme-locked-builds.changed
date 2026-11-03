@@ -1,0 +1,1 @@
+The README build instructions now use `cargo build --locked`, so local builds use exactly the dependency versions in `Cargo.lock`, as release builds do.
