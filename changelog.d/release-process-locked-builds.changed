@@ -1,0 +1,1 @@
+Documented in `docs/release-process.md` that release builds run `cargo build --locked` and fail when `Cargo.lock` is out of date, so refreshed lockfiles must be committed before a release build.

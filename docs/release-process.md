@@ -75,6 +75,9 @@ The timing of the next Stacking cycle can be found [here](https://stx.eco/dao/to
      ```bash
      ./contrib/tools/update-release-lockfiles.sh
      ```
+
+     Release builds (the [Dockerfile](../Dockerfile) and the release workflows) run `cargo build --locked`, which fails when `Cargo.lock` is out of date. Commit the refreshed lockfiles before starting a release build.
+
    - Assemble changelog fragments into `CHANGELOG.md`:
 
      ```bash
