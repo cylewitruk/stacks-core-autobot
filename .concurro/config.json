@@ -2,7 +2,7 @@
   "repository": "cylewitruk/stacks-core-autobot",
   "base": "main",
   "bot_login": "concurro[bot]",
-  "engine": "437a1d95d5dc563e77d81a559b9a3870eda88214",
+  "engine": "0c4780fee89e741392fe7ff80feb015b10153486",
   "autonomous": true,
   "qc": "codex",
   "qc_model": "",
