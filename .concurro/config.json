@@ -11,7 +11,7 @@
   "local_reviewer": "claude",
   "local_review_model": "",
   "max_local_fix_rounds": 2,
-  "local_timeout_seconds": 2400,
+  "local_timeout_seconds": 7200,
   "local_check_timeout_seconds": 900,
   "reviewers": [
     "claude",
