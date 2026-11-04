@@ -471,7 +471,8 @@ mod tests {
         assert_eq!(serialize(&5000u32).ok(), Some(vec![136u8, 19, 0, 0]));
         assert_eq!(serialize(&500000u32).ok(), Some(vec![32u8, 161, 7, 0]));
         assert_eq!(serialize(&168430090u32).ok(), Some(vec![10u8, 10, 10, 10]));
-        // TODO: test negative numbers
+        assert_eq!(serialize(&-1i32).ok(), Some(vec![0xFFu8; 4]));
+        assert_eq!(serialize(&i32::MIN).ok(), Some(vec![0u8, 0, 0, 0x80]));
         assert_eq!(serialize(&1i32).ok(), Some(vec![1u8, 0, 0, 0]));
         assert_eq!(serialize(&256i32).ok(), Some(vec![0u8, 1, 0, 0]));
         assert_eq!(serialize(&5000i32).ok(), Some(vec![136u8, 19, 0, 0]));
@@ -495,7 +496,11 @@ mod tests {
             serialize(&723401728380766730u64).ok(),
             Some(vec![10u8, 10, 10, 10, 10, 10, 10, 10])
         );
-        // TODO: test negative numbers
+        assert_eq!(serialize(&-1i64).ok(), Some(vec![0xFFu8; 8]));
+        assert_eq!(
+            serialize(&i64::MIN).ok(),
+            Some(vec![0u8, 0, 0, 0, 0, 0, 0, 0x80])
+        );
         assert_eq!(serialize(&1i64).ok(), Some(vec![1u8, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!(
             serialize(&256i64).ok(),
@@ -643,7 +648,8 @@ mod tests {
         );
         let failure32: Result<u32, _> = deserialize(&[1u8, 2, 3]);
         assert!(failure32.is_err());
-        // TODO: test negative numbers
+        assert_eq!(deserialize(&[0xFFu8; 4]).ok(), Some(-1i32));
+        assert_eq!(deserialize(&[0u8, 0, 0, 0x80]).ok(), Some(i32::MIN));
         assert_eq!(deserialize(&[0xABu8, 0xCD, 0, 0]).ok(), Some(0xCDABi32));
         assert_eq!(
             deserialize(&[0xA0u8, 0x0D, 0xAB, 0x2D]).ok(),
@@ -663,7 +669,11 @@ mod tests {
         );
         let failure64: Result<u64, _> = deserialize(&[1u8, 2, 3, 4, 5, 6, 7]);
         assert!(failure64.is_err());
-        // TODO: test negative numbers
+        assert_eq!(deserialize(&[0xFFu8; 8]).ok(), Some(-1i64));
+        assert_eq!(
+            deserialize(&[0u8, 0, 0, 0, 0, 0, 0, 0x80]).ok(),
+            Some(i64::MIN)
+        );
         assert_eq!(
             deserialize(&[0xABu8, 0xCD, 0, 0, 0, 0, 0, 0]).ok(),
             Some(0xCDABi64)
