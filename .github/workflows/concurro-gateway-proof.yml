@@ -1,0 +1,23 @@
+name: Concurro gateway proof
+
+# Runs Concurro's gateway proof on a GitHub-hosted runner: Claude Code and Codex through
+# Concurro's inference gateway, holding only a session key minted from this job's OIDC
+# token. The session ID comes from the gateway operator.
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: Session ID issued by the gateway's exchange
+        required: true
+
+permissions: {}
+
+jobs:
+  proof:
+    permissions:
+      id-token: write
+    uses: concurro/concurro/.github/workflows/gateway-proof.yml@main
+    with:
+      session: ${{ inputs.session }}
+      gateway: https://144.76.56.188/concurro
