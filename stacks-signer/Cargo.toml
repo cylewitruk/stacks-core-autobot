@@ -27,7 +27,7 @@ lazy_static = "1.4.0"
 libsigner = { path = "../libsigner" }
 libstackerdb = { path = "../libstackerdb" }
 prometheus = { version = "0.9", optional = true }
-rand_core = "0.6"
+rand_core = "0.9"
 reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = "1"
 slog = { version = "2.5.2", features = [ "max_level_trace" ] }
