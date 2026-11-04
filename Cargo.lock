@@ -2703,7 +2703,7 @@ dependencies = [
  "stacks-marf",
  "stackslib 0.0.1",
  "tempfile",
- "toml 0.5.11",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -4791,7 +4791,7 @@ dependencies = [
  "stdext",
  "thiserror 1.0.65",
  "tiny_http",
- "toml 0.5.11",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4853,7 +4853,7 @@ dependencies = [
  "stx-genesis",
  "tempfile",
  "time",
- "toml 0.5.11",
+ "toml 1.1.2+spec-1.1.0",
  "url",
  "winapi 0.3.9",
 ]
