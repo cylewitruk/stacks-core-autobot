@@ -1,0 +1,19 @@
+name: Concurro executor
+
+# Runs Concurro's model turns for this repository on GitHub-hosted runners. The Concurro service
+# starts a session with a `repository_dispatch` carrying only its ID; the reusable workflow trades
+# this job's OIDC token for the session's gateway key at Concurro's exchange.
+
+on:
+  repository_dispatch:
+    types: [concurro-agent]
+
+permissions: {}
+
+jobs:
+  session:
+    permissions:
+      id-token: write
+    uses: concurro/concurro/.github/workflows/agent.yml@main
+    with:
+      session: ${{ github.event.client_payload.session }}
